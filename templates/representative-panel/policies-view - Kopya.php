@@ -1,7 +1,7 @@
 <?php
 /**
  * Poliçe Detay Sayfası
- * @version 1.2.0
+ * @version 1.1.0
  */
 
 // Renk ayarlarını dahil et
@@ -15,17 +15,6 @@ if (!is_user_logged_in() || !isset($_GET['id'])) {
 $policy_id = intval($_GET['id']);
 global $wpdb;
 $policies_table = $wpdb->prefix . 'insurance_crm_policies';
-
-// İptal sütunlarının varlığını kontrol et
-$cancellation_date_exists = $wpdb->get_row("SHOW COLUMNS FROM $policies_table LIKE 'cancellation_date'");
-if (!$cancellation_date_exists) {
-    $wpdb->query("ALTER TABLE $policies_table ADD COLUMN cancellation_date DATE DEFAULT NULL AFTER status");
-}
-
-$refunded_amount_exists = $wpdb->get_row("SHOW COLUMNS FROM $policies_table LIKE 'refunded_amount'");
-if (!$refunded_amount_exists) {
-    $wpdb->query("ALTER TABLE $policies_table ADD COLUMN refunded_amount DECIMAL(10,2) DEFAULT NULL AFTER cancellation_date");
-}
 
 // Temsilci yetkisi kontrolü
 $current_user_rep_id = get_current_user_rep_id();
@@ -67,13 +56,7 @@ $days_until_expiry = (strtotime($policy->end_date) - strtotime($current_date)) /
 $expiry_status = '';
 $expiry_class = '';
 
-// İptal durumunu kontrol et
-$is_cancelled = !empty($policy->cancellation_date);
-
-if ($is_cancelled) {
-    $expiry_status = 'İptal Edilmiş';
-    $expiry_class = 'cancelled';
-} elseif ($days_until_expiry < 0) {
+if ($days_until_expiry < 0) {
     $expiry_status = 'Süresi Dolmuş';
     $expiry_class = 'expired';
 } elseif ($days_until_expiry <= 30) {
@@ -86,20 +69,8 @@ if ($is_cancelled) {
 ?>
 
 <div class="ab-policy-details">
-    <?php if ($is_cancelled): ?>
-    <!-- İptal Edilmiş Poliçe Uyarısı -->
-    <div class="ab-cancelled-alert">
-        <i class="fas fa-ban"></i>
-        <div class="ab-cancelled-alert-content">
-            <h3>BU POLİÇE İPTAL EDİLMİŞTİR</h3>
-            <p>İptal Tarihi: <strong><?php echo date('d.m.Y', strtotime($policy->cancellation_date)); ?></strong></p>
-            <p>İade Edilen Tutar: <strong><?php echo number_format($policy->refunded_amount, 2, ',', '.'); ?> ₺</strong></p>
-        </div>
-    </div>
-    <?php endif; ?>
-    
     <!-- Poliçe Başlık Bilgisi -->
-    <div class="ab-policy-header <?php echo $is_cancelled ? 'ab-policy-header-cancelled' : ''; ?>">
+    <div class="ab-policy-header">
         <div class="ab-policy-title">
             <h1><i class="fas fa-file-contract"></i> Poliçe: <?php echo esc_html($policy->policy_number); ?></h1>
             <div class="ab-policy-meta">
@@ -132,7 +103,7 @@ if ($is_cancelled) {
     
     <!-- Poliçe Bilgileri -->
     <div class="ab-panels">
-        <div class="ab-panel panel-corporate <?php echo $is_cancelled ? 'ab-panel-cancelled' : ''; ?>">
+        <div class="ab-panel panel-corporate">
             <div class="ab-panel-header">
                 <h3><i class="fas fa-info-circle"></i> Poliçe Bilgileri</h3>
             </div>
@@ -183,43 +154,12 @@ if ($is_cancelled) {
                             </span>
                         </div>
                     </div>
-                    
-                    <?php if ($is_cancelled): ?>
-                    <div class="ab-info-item">
-                        <div class="ab-info-label">İptal Tarihi</div>
-                        <div class="ab-info-value ab-cancelled-date">
-                            <?php echo date('d.m.Y', strtotime($policy->cancellation_date)); ?>
-                        </div>
-                    </div>
-                    
-                    <div class="ab-info-item">
-                        <div class="ab-info-label">İade Edilen Tutar</div>
-                        <div class="ab-info-value ab-refunded-amount">
-                            <?php echo number_format($policy->refunded_amount, 2, ',', '.') . ' ₺'; ?>
-                        </div>
-                    </div>
-                    
-                    <div class="ab-info-item">
-                        <div class="ab-info-label">Kullanılan Süre</div>
-                        <div class="ab-info-value">
-                            <?php 
-                            $start_date = new DateTime($policy->start_date);
-                            $cancel_date = new DateTime($policy->cancellation_date);
-                            $total_days = $start_date->diff(new DateTime($policy->end_date))->days;
-                            $used_days = $start_date->diff($cancel_date)->days;
-                            $used_percentage = round(($used_days / $total_days) * 100, 1);
-                            
-                            echo $used_days . ' gün (' . $used_percentage . '%)';
-                            ?>
-                        </div>
-                    </div>
-                    <?php endif; ?>
                 </div>
             </div>
         </div>
         
         <!-- Döküman -->
-        <div class="ab-panel panel-personal <?php echo $is_cancelled ? 'ab-panel-cancelled' : ''; ?>">
+        <div class="ab-panel panel-personal">
             <div class="ab-panel-header">
                 <h3><i class="fas fa-file-pdf"></i> Poliçe Dökümanı</h3>
             </div>
@@ -246,7 +186,7 @@ if ($is_cancelled) {
         </div>
         
         <!-- Müşteri Bilgileri -->
-        <div class="ab-panel panel-personal <?php echo $is_cancelled ? 'ab-panel-cancelled' : ''; ?>">
+        <div class="ab-panel panel-personal">
             <div class="ab-panel-header">
                 <h3><i class="fas fa-user"></i> Müşteri Bilgileri</h3>
             </div>
@@ -278,13 +218,9 @@ if ($is_cancelled) {
                     <div class="ab-info-item">
                         <div class="ab-info-label">E-posta</div>
                         <div class="ab-info-value">
-                            <?php if (!empty($customer->email)): ?>
                             <a href="mailto:<?php echo esc_attr($customer->email); ?>">
                                 <?php echo esc_html($customer->email); ?>
                             </a>
-                            <?php else: ?>
-                            <span class="ab-no-value">E-posta Bilgisi Eksik</span>
-                            <?php endif; ?>
                         </div>
                     </div>
                     
@@ -297,19 +233,12 @@ if ($is_cancelled) {
                         </div>
                     </div>
                     <?php endif; ?>
-                    
-                    <?php if (!empty($policy->insured_party)): ?>
-                    <div class="ab-info-item">
-                        <div class="ab-info-label">Sigorta Ettiren</div>
-                        <div class="ab-info-value"><?php echo esc_html($policy->insured_party); ?></div>
-                    </div>
-                    <?php endif; ?>
                 </div>
             </div>
         </div>
         
         <!-- Görevler -->
-        <div class="ab-panel ab-full-panel panel-family <?php echo $is_cancelled ? 'ab-panel-cancelled' : ''; ?>">
+        <div class="ab-panel ab-full-panel panel-family">
             <div class="ab-panel-header">
                 <h3><i class="fas fa-tasks"></i> İlgili Görevler</h3>
                 <div class="ab-panel-actions">
@@ -396,7 +325,6 @@ if ($is_cancelled) {
         </div>
         
         <!-- Poliçe Yenileme -->
-        <?php if (!$is_cancelled): ?>
         <div class="ab-panel ab-full-panel panel-vehicle">
             <div class="ab-panel-header">
                 <h3><i class="fas fa-sync-alt"></i> Poliçe Yenileme</h3>
@@ -445,71 +373,6 @@ if ($is_cancelled) {
                 <?php endif; ?>
             </div>
         </div>
-        <?php else: ?>
-        <!-- İptal Edilmiş Poliçe Bilgileri -->
-        <div class="ab-panel ab-full-panel ab-panel-cancellation">
-            <div class="ab-panel-header">
-                <h3><i class="fas fa-ban"></i> İptal Bilgileri</h3>
-            </div>
-            <div class="ab-panel-body">
-                <div class="ab-cancellation-details">
-                    <div class="ab-cancellation-row">
-                        <div class="ab-cancellation-item">
-                            <div class="ab-cancellation-label">İptal Tarihi</div>
-                            <div class="ab-cancellation-value">
-                                <i class="fas fa-calendar-times"></i> <?php echo date('d.m.Y', strtotime($policy->cancellation_date)); ?>
-                            </div>
-                        </div>
-                        
-                        <div class="ab-cancellation-item">
-                            <div class="ab-cancellation-label">İade Edilen Tutar</div>
-                            <div class="ab-cancellation-value">
-                                <i class="fas fa-money-bill-wave"></i> <?php echo number_format($policy->refunded_amount, 2, ',', '.'); ?> ₺
-                            </div>
-                        </div>
-                    </div>
-                    
-                    <div class="ab-cancellation-chart">
-                        <?php 
-                        $start_date = new DateTime($policy->start_date);
-                        $end_date = new DateTime($policy->end_date);
-                        $cancel_date = new DateTime($policy->cancellation_date);
-                        
-                        $total_days = $start_date->diff($end_date)->days;
-                        $used_days = $start_date->diff($cancel_date)->days;
-                        $unused_days = $end_date->diff($cancel_date)->days;
-                        
-                        $used_percent = ($used_days / $total_days) * 100;
-                        $unused_percent = 100 - $used_percent;
-                        ?>
-                        
-                        <div class="ab-progress-container">
-                            <div class="ab-progress-bar">
-                                <div class="ab-progress-used" style="width: <?php echo $used_percent; ?>%;">
-                                    <?php if ($used_percent > 15): ?>
-                                    <span><?php echo round($used_percent); ?>%</span>
-                                    <?php endif; ?>
-                                </div>
-                                <div class="ab-progress-unused" style="width: <?php echo $unused_percent; ?>%;">
-                                    <?php if ($unused_percent > 15): ?>
-                                    <span><?php echo round($unused_percent); ?>%</span>
-                                    <?php endif; ?>
-                                </div>
-                            </div>
-                            <div class="ab-progress-labels">
-                                <div class="ab-progress-label">
-                                    <span>Kullanılan süre:</span> <?php echo $used_days; ?> gün
-                                </div>
-                                <div class="ab-progress-label">
-                                    <span>Kullanılmayan süre:</span> <?php echo $unused_days; ?> gün
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-        <?php endif; ?>
     </div>
 </div>
 
@@ -542,14 +405,6 @@ if ($is_cancelled) {
     gap: 15px;
     padding-bottom: 15px;
     border-bottom: 1px solid #eee;
-}
-
-.ab-policy-header-cancelled {
-    border-bottom: 1px solid #ffcdd2;
-    background-color: #ffebee;
-    padding: 15px;
-    border-radius: 6px;
-    margin: -5px -5px 20px -5px;
 }
 
 .ab-policy-title h1 {
@@ -614,32 +469,6 @@ if ($is_cancelled) {
     box-shadow: 0 5px 15px rgba(0, 0, 0, 0.08);
 }
 
-.ab-panel-cancelled {
-    border: 1px solid #ffcdd2;
-    box-shadow: 0 0 0 2px rgba(255, 205, 210, 0.2);
-}
-
-.ab-panel-cancelled:hover {
-    box-shadow: 0 5px 15px rgba(229, 57, 53, 0.2);
-}
-
-.ab-panel-cancellation {
-    border: 2px solid #e53935;
-    background-color: #fff8f8;
-}
-
-.ab-panel-cancellation .ab-panel-header {
-    background-color: #ffebee;
-}
-
-.ab-panel-cancellation .ab-panel-header h3 {
-    color: #c62828;
-}
-
-.ab-panel-cancellation .ab-panel-header h3 i {
-    color: #c62828;
-}
-
 .ab-full-panel {
     grid-column: 1 / -1;
 }
@@ -670,143 +499,6 @@ if ($is_cancelled) {
 
 .ab-panel-body {
     padding: 18px;
-}
-
-/* İptal Uyarısı */
-.ab-cancelled-alert {
-    padding: 15px 20px;
-    background-color: #feecf0;
-    border: 2px solid #e53935;
-    border-radius: 6px;
-    margin-bottom: 20px;
-    display: flex;
-    align-items: flex-start;
-    gap: 15px;
-    animation: pulse 2s infinite;
-}
-
-@keyframes pulse {
-    0% { box-shadow: 0 0 0 0 rgba(229, 57, 53, 0.4); }
-    70% { box-shadow: 0 0 0 10px rgba(229, 57, 53, 0); }
-    100% { box-shadow: 0 0 0 0 rgba(229, 57, 53, 0); }
-}
-
-.ab-cancelled-alert i {
-    font-size: 24px;
-    color: #e53935;
-}
-
-.ab-cancelled-alert-content h3 {
-    margin: 0 0 10px 0;
-    color: #e53935;
-    font-size: 18px;
-    font-weight: 700;
-}
-
-.ab-cancelled-alert-content p {
-    margin: 5px 0;
-    font-size: 14px;
-}
-
-/* İptal Bilgileri */
-.ab-cancellation-details {
-    padding: 15px;
-    background-color: #fff;
-    border-radius: 6px;
-}
-
-.ab-cancellation-row {
-    display: flex;
-    justify-content: space-between;
-    flex-wrap: wrap;
-    gap: 20px;
-    margin-bottom: 20px;
-}
-
-.ab-cancellation-item {
-    flex: 1;
-    min-width: 200px;
-    padding: 15px;
-    background-color: #f9f9f9;
-    border-radius: 6px;
-    border: 1px solid #eee;
-    text-align: center;
-}
-
-.ab-cancellation-label {
-    font-weight: 600;
-    color: #666;
-    margin-bottom: 10px;
-}
-
-.ab-cancellation-value {
-    font-size: 16px;
-    font-weight: 700;
-    color: #333;
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    gap: 8px;
-}
-
-.ab-cancellation-value i {
-    color: #e53935;
-}
-
-.ab-cancellation-chart {
-    padding: 20px;
-    background-color: #f9f9f9;
-    border-radius: 6px;
-    border: 1px solid #eee;
-}
-
-.ab-progress-container {
-    width: 100%;
-}
-
-.ab-progress-bar {
-    height: 30px;
-    border-radius: 15px;
-    background-color: #eee;
-    display: flex;
-    overflow: hidden;
-    margin-bottom: 15px;
-}
-
-.ab-progress-used {
-    height: 100%;
-    background-color: #e53935;
-    color: white;
-    text-align: center;
-    line-height: 30px;
-    font-weight: 700;
-    font-size: 14px;
-    transition: width 1s ease-in-out;
-}
-
-.ab-progress-unused {
-    height: 100%;
-    background-color: #4caf50;
-    color: white;
-    text-align: center;
-    line-height: 30px;
-    font-weight: 700;
-    font-size: 14px;
-    transition: width 1s ease-in-out;
-}
-
-.ab-progress-labels {
-    display: flex;
-    justify-content: space-between;
-}
-
-.ab-progress-label {
-    font-size: 14px;
-    color: #666;
-}
-
-.ab-progress-label span {
-    font-weight: 600;
 }
 
 /* Bilgi Grid */
@@ -850,28 +542,7 @@ if ($is_cancelled) {
     font-style: italic;
 }
 
-.ab-cancelled-date {
-    color: #e53935;
-    font-weight: 600;
-}
-
-.ab-refunded-amount {
-    color: #4caf50;
-    font-weight: 600;
-}
-
 /* Badge Stilleri */
-.ab-badge {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    padding: 3px 8px;
-    border-radius: 10px;
-    font-size: 11px;
-    font-weight: 500;
-    line-height: 1.2;
-}
-
 .ab-badge-priority-high {
     background-color: #ffeef0;
     color: #cb2431;
@@ -907,16 +578,6 @@ if ($is_cancelled) {
     color: #666;
 }
 
-.ab-badge-status-aktif {
-    background-color: #e6ffed;
-    color: #22863a;
-}
-
-.ab-badge-status-pasif {
-    background-color: #f5f5f5;
-    color: #666;
-}
-
 .ab-badge-expired {
     background-color: #ffeef0;
     color: #cb2431;
@@ -930,11 +591,6 @@ if ($is_cancelled) {
 .ab-badge-active {
     background-color: #e6ffed;
     color: #22863a;
-}
-
-.ab-badge-cancelled {
-    background-color: #f3e5f5;
-    color: #9c27b0;
 }
 
 /* Dökumanlar */
@@ -1074,47 +730,6 @@ if ($is_cancelled) {
     overflow: hidden;
 }
 
-.ab-crm-table {
-    width: 100%;
-    border-collapse: collapse;
-}
-
-.ab-crm-table th,
-.ab-crm-table td {
-    padding: 10px 12px;
-    border-bottom: 1px solid #eee;
-    text-align: left;
-    font-size: 13px;
-}
-
-.ab-crm-table th {
-    background-color: #f8f9fa;
-    font-weight: 600;
-    color: #444;
-}
-
-.ab-crm-table tr:hover td {
-    background-color: #f5f5f5;
-}
-
-.ab-crm-table tr:last-child td {
-    border-bottom: none;
-}
-
-.ab-actions {
-    display: flex;
-    gap: 10px;
-}
-
-.ab-actions a {
-    color: #555;
-    text-decoration: none;
-}
-
-.ab-actions a:hover {
-    color: #0366d6;
-}
-
 /* Animasyonlar */
 .ab-panel, .ab-document-preview, .ab-renewal-banner {
     animation: fadeIn 0.5s ease;
@@ -1158,35 +773,6 @@ if ($is_cancelled) {
         width: 100%;
         justify-content: center;
         margin-top: 15px;
-    }
-    
-    .ab-cancellation-row {
-        flex-direction: column;
-        gap: 10px;
-    }
-    
-    .ab-cancelled-alert {
-        flex-direction: column;
-        text-align: center;
-        padding: 15px 10px;
-    }
-}
-
-@media (max-width: 576px) {
-    .ab-policy-details {
-        padding: 15px 10px;
-    }
-    
-    .ab-panel-body {
-        padding: 15px 10px;
-    }
-    
-    .ab-policy-title h1 {
-        font-size: 18px;
-    }
-    
-    .ab-cancellation-chart {
-        padding: 10px;
     }
 }
 </style>

@@ -1,7 +1,7 @@
 <?php
 /**
  * Frontend Poliçe Yönetim Sayfası
- * @version 2.2.7
+ * @version 2.2.6
  */
 
 include_once(dirname(__FILE__) . '/template-colors.php');
@@ -29,17 +29,6 @@ if (!$column_exists) {
     }
 }
 
-// İptal işlemleri için yeni sütunlar kontrolü ve ekleme
-$cancellation_date_exists = $wpdb->get_row("SHOW COLUMNS FROM $policies_table LIKE 'cancellation_date'");
-if (!$cancellation_date_exists) {
-    $wpdb->query("ALTER TABLE $policies_table ADD COLUMN cancellation_date DATE DEFAULT NULL AFTER status");
-}
-
-$refunded_amount_exists = $wpdb->get_row("SHOW COLUMNS FROM $policies_table LIKE 'refunded_amount'");
-if (!$refunded_amount_exists) {
-    $wpdb->query("ALTER TABLE $policies_table ADD COLUMN refunded_amount DECIMAL(10,2) DEFAULT NULL AFTER cancellation_date");
-}
-
 // Mevcut kullanıcı temsilcisi ID'sini alma
 function get_current_user_rep_id() {
     global $wpdb;
@@ -55,13 +44,23 @@ if (isset($_SESSION['crm_notice'])) {
     unset($_SESSION['crm_notice']);
 }
 
-// Silme/İptal işlemi - İptal sayfasına yönlendirme
+// Silme işlemi
 if (isset($_GET['action']) && $_GET['action'] === 'delete' && isset($_GET['id'])) {
     $policy_id = intval($_GET['id']);
     if (isset($_GET['_wpnonce']) && wp_verify_nonce($_GET['_wpnonce'], 'delete_policy_' . $policy_id)) {
-        // Düzenleme sayfasına iptal işlemi için yönlendir
-        echo '<script>window.location.href = "?view=policies&action=cancel&id=' . $policy_id . '";</script>';
-        exit;
+        $can_delete = true;
+        if (!current_user_can('administrator') && !current_user_can('insurance_manager')) {
+            $policy = $wpdb->get_row($wpdb->prepare("SELECT * FROM $policies_table WHERE id = %d", $policy_id));
+            if ($policy->representative_id != $current_user_rep_id) {
+                $can_delete = false;
+                $notice = '<div class="ab-notice ab-error">Bu poliçeyi silme yetkiniz yok.</div>';
+            }
+        }
+        
+        if ($can_delete) {
+            $wpdb->delete($policies_table, array('id' => $policy_id));
+            $notice = '<div class="ab-notice ab-success">Poliçe başarıyla silindi.</div>';
+        }
     }
 }
 
@@ -137,7 +136,7 @@ $customers = $wpdb->get_results("SELECT id, first_name, last_name FROM $customer
 $total_pages = ceil($total_items / $per_page);
 
 $current_action = isset($_GET['action']) ? $_GET['action'] : '';
-$show_list = ($current_action !== 'view' && $current_action !== 'edit' && $current_action !== 'new' && $current_action !== 'renew' && $current_action !== 'cancel');
+$show_list = ($current_action !== 'view' && $current_action !== 'edit' && $current_action !== 'new' && $current_action !== 'renew');
 ?>
 
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css">
@@ -281,12 +280,9 @@ $show_list = ($current_action !== 'view' && $current_action !== 'edit' && $curre
                 <?php foreach ($policies as $policy): 
                     $is_expired = strtotime($policy->end_date) < time();
                     $is_expiring_soon = !$is_expired && (strtotime($policy->end_date) - time()) < (30 * 24 * 60 * 60);
-                    $is_cancelled = !empty($policy->cancellation_date);
                     
                     $row_class = '';
-                    if ($is_cancelled) {
-                        $row_class = 'cancelled';
-                    } elseif ($is_expired) {
+                    if ($is_expired) {
                         $row_class = 'expired';
                     } elseif ($is_expiring_soon) {
                         $row_class = 'expiring-soon';
@@ -304,9 +300,7 @@ $show_list = ($current_action !== 'view' && $current_action !== 'edit' && $curre
                         <td>
                             <a href="?view=policies&action=view&id=<?php echo $policy->id; ?>" class="ab-policy-number">
                                 <?php echo esc_html($policy->policy_number); ?>
-                                <?php if ($is_cancelled): ?>
-                                    <span class="ab-badge ab-badge-cancelled">İptal Edilmiş</span>
-                                <?php elseif ($is_expired): ?>
+                                <?php if ($is_expired): ?>
                                     <span class="ab-badge ab-badge-danger">Süresi Dolmuş</span>
                                 <?php elseif ($is_expiring_soon): ?>
                                     <span class="ab-badge ab-badge-warning">Yakında Bitiyor</span>
@@ -326,9 +320,6 @@ $show_list = ($current_action !== 'view' && $current_action !== 'edit' && $curre
                             <span class="ab-badge ab-badge-status-<?php echo esc_attr($policy->status); ?>">
                                 <?php echo $policy->status === 'aktif' ? 'Aktif' : 'Pasif'; ?>
                             </span>
-                            <?php if (!empty($policy->cancellation_date)): ?>
-                                <br><small class="ab-cancelled-date">İptal: <?php echo date('d.m.Y', strtotime($policy->cancellation_date)); ?></small>
-                            <?php endif; ?>
                         </td>
                         <td>
                             <?php if (!empty($policy->document_path)): ?>
@@ -348,12 +339,11 @@ $show_list = ($current_action !== 'view' && $current_action !== 'edit' && $curre
                                 <a href="?view=policies&action=edit&id=<?php echo $policy->id; ?>" title="Düzenle" class="ab-action-btn">
                                     <i class="fas fa-edit"></i>
                                 </a>
-                                <?php if ($policy->status === 'aktif' && empty($policy->cancellation_date)): ?>
-                                <a href="<?php echo wp_nonce_url('?view=policies&action=cancel&id=' . $policy->id, 'delete_policy_' . $policy->id); ?>" 
-                                   title="İptal Et" class="ab-action-btn ab-action-danger">
-                                    <i class="fas fa-ban"></i>
+                                <a href="<?php echo wp_nonce_url('?view=policies&action=delete&id=' . $policy->id, 'delete_policy_' . $policy->id); ?>" 
+                                   onclick="return confirm('Bu poliçeyi silmek istediğinizden emin misiniz?');" 
+                                   title="Sil" class="ab-action-btn ab-action-danger">
+                                    <i class="fas fa-trash"></i>
                                 </a>
-                                <?php endif; ?>
                             </div>
                         </td>
                     </tr>
@@ -398,7 +388,6 @@ if (isset($_GET['action'])) {
         case 'new':
         case 'edit':
         case 'renew':
-        case 'cancel': // İptal sayfası için eklendi
             include_once('policies-form.php');
             break;
     }
@@ -721,20 +710,6 @@ tr.expiring-soon td:first-child {
     border-left: 3px solid #ffc107;
 }
 
-tr.cancelled td {
-    background-color: #f9f0ff !important;
-}
-
-tr.cancelled td:first-child {
-    border-left: 3px solid #9c27b0;
-}
-
-.ab-cancelled-date {
-    color: #9c27b0;
-    font-style: italic;
-    font-size: 11px;
-}
-
 .ab-policy-number {
     font-weight: 500;
     color: #2271b1;
@@ -803,11 +778,6 @@ tr.cancelled td:first-child {
 .ab-badge-warning {
     background-color: #fff8e5;
     color: #bf8700;
-}
-
-.ab-badge-cancelled {
-    background-color: #f3e5f5;
-    color: #9c27b0;
 }
 
 .ab-no-document {

@@ -39,7 +39,6 @@ if (isset($_POST['save_customer']) && isset($_POST['customer_nonce']) && wp_veri
     $customer_data['birth_date'] = !empty($_POST['birth_date']) ? sanitize_text_field($_POST['birth_date']) : null;
     $customer_data['gender'] = !empty($_POST['gender']) ? sanitize_text_field($_POST['gender']) : null;
     $customer_data['occupation'] = !empty($_POST['occupation']) ? sanitize_text_field($_POST['occupation']) : null;
-    $customer_data['marital_status'] = !empty($_POST['marital_status']) ? sanitize_text_field($_POST['marital_status']) : null;
     
     // Kadın ve gebe ise
     if ($customer_data['gender'] === 'female') {
@@ -590,17 +589,6 @@ function get_allowed_file_types_text() {
                             </select>
                         </div>
                     </div>
-
-                    <div class="ab-form-row">
-                        <div class="ab-form-group">
-                            <label for="marital_status"><i class="fas fa-ring"></i> Medeni Durum</label>
-                            <select name="marital_status" id="marital_status" class="ab-select">
-                                <option value="">Seçiniz</option>
-                                <option value="single" <?php echo $editing && isset($customer->marital_status) && $customer->marital_status === 'single' ? 'selected' : ''; ?>>Bekar</option>
-                                <option value="married" <?php echo $editing && isset($customer->marital_status) && $customer->marital_status === 'married' ? 'selected' : ''; ?>>Evli</option>
-                            </select>
-                        </div>
-                    </div>
                     
                     <div class="ab-form-row pregnancy-row" style="display:<?php echo (!$editing || $customer->gender !== 'female') ? 'none' : 'flex'; ?>;">
                         <div class="ab-form-group">
@@ -621,7 +609,7 @@ function get_allowed_file_types_text() {
             </div>
             
             <!-- AİLE BİLGİLERİ BÖLÜMÜ -->
-            <div class="ab-section-wrapper family-section" style="display:<?php echo (!$editing || !isset($customer->marital_status) || $customer->marital_status !== 'married') ? 'none' : 'block'; ?>;">
+            <div class="ab-section-wrapper">
                 <div class="ab-section-header">
                     <h3><i class="fas fa-user-friends"></i> Aile Bilgileri</h3>
                 </div>
@@ -1928,19 +1916,6 @@ jQuery(document).ready(function($) {
         } else {
             $('.pregnancy-week-container').slideUp();
             $('#pregnancy_week').val('');
-        }
-    });
-    
-    // Medeni durum değiştiğinde aile bilgileri bölümünü göster/gizle
-    $('#marital_status').change(function() {
-        if ($(this).val() === 'married') {
-            $('.family-section').slideDown();
-        } else {
-            $('.family-section').slideUp();
-            // Aile bilgilerini temizle
-            $('#spouse_name, #spouse_tc_identity').val('');
-            $('#spouse_birth_date').val('');
-            $('#children_count').val('0').trigger('change');
         }
     });
     

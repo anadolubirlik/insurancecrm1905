@@ -1,7 +1,7 @@
 <?php
 /**
  * Poliçe Ekleme/Düzenleme Formu
- * @version 1.3.1
+ * @version 1.2.3
  */
 
 include_once(dirname(__FILE__) . '/template-colors.php');
@@ -10,31 +10,21 @@ if (!is_user_logged_in()) {
     return;
 }
 
-// Veritabanında gerekli sütunların varlığını kontrol et ve yoksa ekle
+// Veritabanında insured_party sütununun varlığını kontrol et ve yoksa ekle
 global $wpdb;
 $policies_table = $wpdb->prefix . 'insurance_crm_policies';
-
-// insured_party sütunu kontrolü
 $column_exists = $wpdb->get_row("SHOW COLUMNS FROM $policies_table LIKE 'insured_party'");
 if (!$column_exists) {
-    $wpdb->query("ALTER TABLE $policies_table ADD COLUMN insured_party VARCHAR(255) DEFAULT NULL AFTER status");
-}
-
-// İptal bilgileri için sütunlar
-$cancellation_date_exists = $wpdb->get_row("SHOW COLUMNS FROM $policies_table LIKE 'cancellation_date'");
-if (!$cancellation_date_exists) {
-    $wpdb->query("ALTER TABLE $policies_table ADD COLUMN cancellation_date DATE DEFAULT NULL AFTER status");
-}
-
-$refunded_amount_exists = $wpdb->get_row("SHOW COLUMNS FROM $policies_table LIKE 'refunded_amount'");
-if (!$refunded_amount_exists) {
-    $wpdb->query("ALTER TABLE $policies_table ADD COLUMN refunded_amount DECIMAL(10,2) DEFAULT NULL AFTER cancellation_date");
+    $result = $wpdb->query("ALTER TABLE $policies_table ADD COLUMN insured_party VARCHAR(255) DEFAULT NULL AFTER status");
+    if ($result === false) {
+        echo '<div class="ab-notice ab-error">Veritabanı güncellenirken bir hata oluştu: ' . $wpdb->last_error . '</div>';
+        return;
+    }
 }
 
 $editing = isset($_GET['action']) && $_GET['action'] === 'edit' && isset($_GET['id']) && intval($_GET['id']) > 0;
 $renewing = isset($_GET['action']) && $_GET['action'] === 'renew' && isset($_GET['id']) && intval($_GET['id']) > 0;
-$cancelling = isset($_GET['action']) && $_GET['action'] === 'cancel' && isset($_GET['id']) && intval($_GET['id']) > 0;
-$policy_id = $editing || $renewing || $cancelling ? intval($_GET['id']) : 0;
+$policy_id = $editing || $renewing ? intval($_GET['id']) : 0;
 
 $selected_customer_id = isset($_GET['customer_id']) ? intval($_GET['customer_id']) : 0;
 
@@ -51,13 +41,6 @@ if (isset($_POST['save_policy']) && isset($_POST['policy_nonce']) && wp_verify_n
         'status' => sanitize_text_field($_POST['status']),
         'insured_party' => isset($_POST['same_as_insured']) && $_POST['same_as_insured'] === 'yes' ? '' : sanitize_text_field($_POST['insured_party'])
     );
-
-    // İptal bilgilerini ekle
-    if (isset($_POST['is_cancelled']) && $_POST['is_cancelled'] === 'yes') {
-        $policy_data['cancellation_date'] = sanitize_text_field($_POST['cancellation_date']);
-        $policy_data['refunded_amount'] = !empty($_POST['refunded_amount']) ? floatval($_POST['refunded_amount']) : 0;
-        $policy_data['status'] = 'pasif'; // İptal edilen poliçeyi pasif yap
-    }
 
     if (!empty($_FILES['document']['name'])) {
         $upload_dir = wp_upload_dir();
@@ -93,14 +76,14 @@ if (isset($_POST['save_policy']) && isset($_POST['policy_nonce']) && wp_verify_n
 
     $table_name = $wpdb->prefix . 'insurance_crm_policies';
 
-    if ($editing || $cancelling) {
+    if ($editing) {
         $can_edit = true;
         if (!current_user_can('administrator') && !current_user_can('insurance_manager')) {
             $current_user_rep_id = get_current_user_rep_id();
             $policy_check = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table_name WHERE id = %d", $policy_id));
             if ($policy_check->representative_id != $current_user_rep_id) {
                 $can_edit = false;
-                $message = 'Bu poliçeyi düzenleme/iptal etme yetkiniz yok.';
+                $message = 'Bu poliçeyi düzenleme yetkiniz yok.';
                 $message_type = 'error';
             }
         }
@@ -110,14 +93,13 @@ if (isset($_POST['save_policy']) && isset($_POST['policy_nonce']) && wp_verify_n
             $result = $wpdb->update($table_name, $policy_data, ['id' => $policy_id]);
 
             if ($result !== false) {
-                $action_text = isset($_POST['is_cancelled']) && $_POST['is_cancelled'] === 'yes' ? 'iptal edildi' : 'güncellendi';
-                $message = 'Poliçe başarıyla ' . $action_text . '.';
+                $message = 'Poliçe başarıyla güncellendi.';
                 $message_type = 'success';
                 $_SESSION['crm_notice'] = '<div class="ab-notice ab-' . $message_type . '">' . $message . '</div>';
                 echo '<script>window.location.href = "?view=policies&updated=true";</script>';
                 exit;
             } else {
-                $message = 'Poliçe işlenirken bir hata oluştu.';
+                $message = 'Poliçe güncellenirken bir hata oluştu.';
                 $message_type = 'error';
             }
         }
@@ -155,7 +137,7 @@ if (isset($_POST['save_policy']) && isset($_POST['policy_nonce']) && wp_verify_n
 }
 
 $policy = null;
-if ($editing || $renewing || $cancelling) {
+if ($editing || $renewing) {
     global $wpdb;
     $table_name = $wpdb->prefix . 'insurance_crm_policies';
     $policy = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table_name WHERE id = %d", $policy_id));
@@ -206,34 +188,6 @@ if ($selected_customer_id || (isset($policy->customer_id) && $policy->customer_i
         $selected_customer_name = esc_html($customer->first_name . ' ' . $customer->last_name);
     }
 }
-
-// İptal işlemi için ek veriler
-$is_cancelled = !empty($policy->cancellation_date);
-$calculated_refund = 0;
-
-if ($cancelling && !$is_cancelled) {
-    // Bugüne kadarki kullanılan gün sayısını hesapla
-    $start_date = new DateTime($policy->start_date);
-    $end_date = new DateTime($policy->end_date);
-    $today = new DateTime();
-    
-    // Toplam poliçe gün sayısı
-    $total_days = $start_date->diff($end_date)->days;
-    
-    // Bugüne kadar kullanılan gün sayısı
-    $used_days = $start_date->diff($today)->days;
-    
-    // Eğer bugün bitiş tarihinden sonraysa, kullanılan gün sayısı toplam gün sayısına eşittir
-    if ($today > $end_date) {
-        $used_days = $total_days;
-    }
-    
-    // Kullanılmayan gün sayısı
-    $remaining_days = max(0, $total_days - $used_days);
-    
-    // İade edilecek prim hesabı (orantılı olarak)
-    $calculated_refund = round(($remaining_days / $total_days) * $policy->premium_amount, 2);
-}
 ?>
 
 <div class="ab-policy-form-container">
@@ -244,8 +198,6 @@ if ($cancelling && !$is_cancelled) {
                 echo '<i class="fas fa-edit"></i> Poliçe Düzenle';
             } elseif ($renewing) {
                 echo '<i class="fas fa-sync-alt"></i> Poliçe Yenile';
-            } elseif ($cancelling) {
-                echo '<i class="fas fa-ban"></i> Poliçe İptal';
             } else {
                 echo '<i class="fas fa-plus-circle"></i> Yeni Poliçe Ekle';
             }
@@ -274,41 +226,17 @@ if ($cancelling && !$is_cancelled) {
     </div>
     <?php endif; ?>
     
-    <?php if ($is_cancelled && ($editing || $cancelling)): ?>
-    <div class="ab-cancelled-alert">
-        <i class="fas fa-ban"></i>
-        <div class="ab-cancelled-alert-content">
-            <h3>BU POLİÇE İPTAL EDİLMİŞTİR</h3>
-            <p>İptal Tarihi: <strong><?php echo date('d.m.Y', strtotime($policy->cancellation_date)); ?></strong></p>
-            <p>İade Edilen Tutar: <strong><?php echo number_format($policy->refunded_amount, 2, ',', '.'); ?> ₺</strong></p>
-        </div>
-    </div>
-    <?php endif; ?>
-    
     <form method="post" action="" class="ab-policy-form" enctype="multipart/form-data">
         <?php wp_nonce_field('save_policy', 'policy_nonce'); ?>
         
-        <div class="ab-form-card panel-corporate <?php echo $is_cancelled ? 'ab-form-card-cancelled' : ''; ?>">
-            <?php if ($cancelling && !$is_cancelled): ?>
-            <!-- İptal İşlemi Uyarı Kutusu -->
-            <div class="ab-cancel-warning">
-                <i class="fas fa-exclamation-triangle"></i>
-                <div class="ab-cancel-warning-content">
-                    <h3>Poliçe İptal İşlemi</h3>
-                    <p>Bu poliçeyi iptal etmek üzeresiniz. İptal işlemi sonrası poliçe pasif duruma geçecektir.</p>
-                    <p>Poliçe Numarası: <strong><?php echo esc_html($policy->policy_number); ?></strong></p>
-                    <p>Müşteri: <strong><?php echo esc_html($selected_customer_name); ?></strong></p>
-                </div>
-            </div>
-            <?php endif; ?>
-
+        <div class="ab-form-card panel-corporate">
             <div class="ab-form-section">
                 <h3><i class="fas fa-user-check"></i> Müşteri ve Temsilci Bilgileri</h3>
                 
                 <div class="ab-form-row">
                     <div class="ab-form-group">
                         <label for="customer_id">Müşteri <span class="required">*</span></label>
-                        <select name="customer_id" id="customer_id" class="ab-select" required <?php echo ($cancelling || $is_cancelled) ? 'disabled' : ''; ?>>
+                        <select name="customer_id" id="customer_id" class="ab-select" required>
                             <option value="">Müşteri Seçin</option>
                             <?php 
                             $selected_id = isset($policy->customer_id) ? $policy->customer_id : $selected_customer_id;
@@ -319,14 +247,11 @@ if ($cancelling && !$is_cancelled) {
                                 </option>
                             <?php endforeach; ?>
                         </select>
-                        <?php if ($cancelling || $is_cancelled): ?>
-                            <input type="hidden" name="customer_id" value="<?php echo $policy->customer_id; ?>">
-                        <?php endif; ?>
                     </div>
                     
                     <div class="ab-form-group">
                         <label for="representative_id">Müşteri Temsilcisi</label>
-                        <select name="representative_id" id="representative_id" class="ab-select" <?php echo ($cancelling || $is_cancelled) ? 'disabled' : ''; ?>>
+                        <select name="representative_id" id="representative_id" class="ab-select">
                             <option value="">Temsilci Seçin</option>
                             <?php foreach ($representatives as $rep): ?>
                                 <option value="<?php echo $rep->id; ?>" <?php echo isset($policy->representative_id) && $policy->representative_id == $rep->id ? 'selected' : ''; ?>>
@@ -334,13 +259,9 @@ if ($cancelling && !$is_cancelled) {
                                 </option>
                             <?php endforeach; ?>
                         </select>
-                        <?php if ($cancelling || $is_cancelled): ?>
-                            <input type="hidden" name="representative_id" value="<?php echo $policy->representative_id; ?>">
-                        <?php endif; ?>
                     </div>
                 </div>
                 
-                <?php if (!$cancelling && !$is_cancelled): ?>
                 <div class="ab-form-row">
                     <div class="ab-form-group ab-full-width">
                         <label>
@@ -353,13 +274,9 @@ if ($cancelling && !$is_cancelled) {
                 <div class="ab-form-row insured-party-row" style="<?php echo (!isset($policy->insured_party) || empty($policy->insured_party)) ? 'display: none;' : ''; ?>">
                     <div class="ab-form-group ab-full-width">
                         <label for="insured_party">Sigorta Ettiren <span class="required">*</span></label>
-                        <input type="text" name="insured_party" id="insured_party" class="ab-input" value="<?php echo isset($policy->insured_party) ? esc_attr($policy->insured_party) : ''; ?>">
+                        <input type="text" name="insured_party" id="insured_party" class="ab-input" value="<?php echo isset($policy->insured_party) ? esc_attr($policy->insured_party) : ''; ?>" <?php echo !isset($policy->insured_party) || empty($policy->insured_party) ? '' : 'required'; ?>>
                     </div>
                 </div>
-                <?php else: ?>
-                <input type="hidden" name="insured_party" value="<?php echo isset($policy->insured_party) ? esc_attr($policy->insured_party) : ''; ?>">
-                <input type="hidden" name="same_as_insured" value="<?php echo !isset($policy->insured_party) || empty($policy->insured_party) ? 'yes' : 'no'; ?>">
-                <?php endif; ?>
             </div>
             
             <div class="ab-form-section">
@@ -369,12 +286,12 @@ if ($cancelling && !$is_cancelled) {
                     <div class="ab-form-group">
                         <label for="policy_number">Poliçe No <span class="required">*</span></label>
                         <input type="text" name="policy_number" id="policy_number" class="ab-input"
-                            value="<?php echo isset($policy->policy_number) ? esc_attr($policy->policy_number) : ''; ?>" required <?php echo ($cancelling || $is_cancelled) ? 'readonly' : ''; ?>>
+                            value="<?php echo isset($policy->policy_number) ? esc_attr($policy->policy_number) : ''; ?>" required>
                     </div>
                     
                     <div class="ab-form-group">
                         <label for="policy_type">Poliçe Türü <span class="required">*</span></label>
-                        <select name="policy_type" id="policy_type" class="ab-select" required <?php echo ($cancelling || $is_cancelled) ? 'disabled' : ''; ?>>
+                        <select name="policy_type" id="policy_type" class="ab-select" required>
                             <option value="">Poliçe Türü Seçin</option>
                             <?php foreach ($policy_types as $type): ?>
                                 <option value="<?php echo $type; ?>" <?php echo isset($policy->policy_type) && $policy->policy_type == $type ? 'selected' : ''; ?>>
@@ -382,16 +299,13 @@ if ($cancelling && !$is_cancelled) {
                                 </option>
                             <?php endforeach; ?>
                         </select>
-                        <?php if ($cancelling || $is_cancelled): ?>
-                            <input type="hidden" name="policy_type" value="<?php echo esc_attr($policy->policy_type); ?>">
-                        <?php endif; ?>
                     </div>
                 </div>
                 
                 <div class="ab-form-row">
                     <div class="ab-form-group">
                         <label for="insurance_company">Sigorta Firması <span class="required">*</span></label>
-                        <select name="insurance_company" id="insurance_company" class="ab-select" required <?php echo ($cancelling || $is_cancelled) ? 'disabled' : ''; ?>>
+                        <select name="insurance_company" id="insurance_company" class="ab-select" required>
                             <option value="">Sigorta Firması Seçin</option>
                             <?php foreach ($insurance_companies as $company): ?>
                                 <option value="<?php echo $company; ?>" <?php echo isset($policy->insurance_company) && $policy->insurance_company == $company ? 'selected' : ''; ?>>
@@ -399,15 +313,12 @@ if ($cancelling && !$is_cancelled) {
                                 </option>
                             <?php endforeach; ?>
                         </select>
-                        <?php if ($cancelling || $is_cancelled): ?>
-                            <input type="hidden" name="insurance_company" value="<?php echo esc_attr($policy->insurance_company); ?>">
-                        <?php endif; ?>
                     </div>
                     
                     <div class="ab-form-group">
                         <label for="start_date">Başlangıç Tarihi <span class="required">*</span></label>
                         <input type="date" name="start_date" id="start_date" class="ab-input ab-date-input"
-                            value="<?php echo isset($policy->start_date) ? esc_attr($policy->start_date) : date('Y-m-d'); ?>" required <?php echo ($cancelling || $is_cancelled) ? 'readonly' : ''; ?>>
+                            value="<?php echo isset($policy->start_date) ? esc_attr($policy->start_date) : date('Y-m-d'); ?>" required>
                     </div>
                 </div>
                 
@@ -415,17 +326,16 @@ if ($cancelling && !$is_cancelled) {
                     <div class="ab-form-group">
                         <label for="end_date">Bitiş Tarihi <span class="required">*</span></label>
                         <input type="date" name="end_date" id="end_date" class="ab-input ab-date-input"
-                            value="<?php echo isset($policy->end_date) ? esc_attr($policy->end_date) : date('Y-m-d', strtotime('+1 year')); ?>" required <?php echo ($cancelling || $is_cancelled) ? 'readonly' : ''; ?>>
+                            value="<?php echo isset($policy->end_date) ? esc_attr($policy->end_date) : date('Y-m-d', strtotime('+1 year')); ?>" required>
                     </div>
                     
                     <div class="ab-form-group">
                         <label for="premium_amount">Prim Tutarı (₺) <span class="required">*</span></label>
                         <input type="number" name="premium_amount" id="premium_amount" class="ab-input" step="0.01" min="0"
-                            value="<?php echo isset($policy->premium_amount) ? esc_attr($policy->premium_amount) : ''; ?>" required <?php echo ($cancelling || $is_cancelled) ? 'readonly' : ''; ?>>
+                            value="<?php echo isset($policy->premium_amount) ? esc_attr($policy->premium_amount) : ''; ?>" required>
                     </div>
                 </div>
                 
-                <?php if (!$cancelling && !$is_cancelled): ?>
                 <div class="ab-form-row">
                     <div class="ab-form-group">
                         <label for="status">Durum</label>
@@ -440,79 +350,8 @@ if ($cancelling && !$is_cancelled) {
                         </div>
                     </div>
                 </div>
-                <?php else: ?>
-                <!-- İptal edilmiş poliçe durumu için gizli alan -->
-                <input type="hidden" name="status" value="pasif">
-                
-                <!-- İptal Bilgileri Bölümü -->
-                <div class="ab-form-section ab-cancellation-section">
-                    <h3><i class="fas fa-ban"></i> İptal Bilgileri</h3>
-                    
-                    <?php if ($cancelling && !$is_cancelled): ?>
-                    <!-- Poliçe İptal Seçeneği -->
-                    <div class="ab-form-row">
-                        <div class="ab-form-group ab-full-width">
-                            <div class="ab-cancel-option">
-                                <label>
-                                    <input type="checkbox" name="is_cancelled" id="is_cancelled" value="yes" <?php echo $is_cancelled ? 'checked' : ''; ?>>
-                                    <span class="ab-cancel-label">Poliçe İptal Edilsin?</span>
-                                </label>
-                                <?php if ($is_cancelled): ?>
-                                    <div class="ab-badge ab-badge-cancelled"><i class="fas fa-ban"></i> Bu poliçe zaten iptal edilmiş</div>
-                                <?php endif; ?>
-                            </div>
-                        </div>
-                    </div>
-                    
-                    <!-- İptal Detayları (başlangıçta gizli) -->
-                    <div id="cancellation-details" class="<?php echo !$is_cancelled ? 'ab-hidden' : ''; ?>">
-                    <?php endif; ?>
-                        
-                        <div class="ab-form-row">
-                            <div class="ab-form-group">
-                                <label for="cancellation_date">İptal Tarihi <span class="required">*</span></label>
-                                <input type="date" name="cancellation_date" id="cancellation_date" class="ab-input ab-date-input"
-                                    value="<?php echo isset($policy->cancellation_date) ? esc_attr($policy->cancellation_date) : date('Y-m-d'); ?>" 
-                                    required <?php echo $is_cancelled && $editing ? 'readonly' : ''; ?>>
-                            </div>
-                            
-                            <div class="ab-form-group">
-                                <label for="refunded_amount">İade Edilen Prim (₺)</label>
-                                <input type="number" name="refunded_amount" id="refunded_amount" class="ab-input" step="0.01" min="0"
-                                    value="<?php echo isset($policy->refunded_amount) ? esc_attr($policy->refunded_amount) : $calculated_refund; ?>"
-                                    <?php echo $is_cancelled && $editing ? 'readonly' : ''; ?>>
-                                <?php if ($cancelling && !$is_cancelled && $calculated_refund > 0): ?>
-                                    <div class="ab-form-note">
-                                        <i class="fas fa-info-circle"></i> Tahmini iade tutarı: <?php echo number_format($calculated_refund, 2, ',', '.'); ?> ₺
-                                    </div>
-                                <?php endif; ?>
-                            </div>
-                        </div>
-                        
-                        <?php if ($cancelling && !$is_cancelled): ?>
-                        <div class="ab-form-row">
-                            <div class="ab-form-group ab-full-width">
-                                <div class="ab-cancel-info">
-                                    <i class="fas fa-info-circle"></i>
-                                    <div>
-                                        <p>İptal işlemi sonrası poliçe durumu otomatik olarak <strong>Pasif</strong> olarak ayarlanacaktır.</p>
-                                        <p>İptal tarihi, poliçenin geçerlilik süresinden önce olmalıdır.</p>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                        </div>
-                        <?php endif; ?>
-                    
-                    <!-- İptal seçeneği için gizli alan (edit modunda) -->
-                    <?php if ($editing && $is_cancelled): ?>
-                        <input type="hidden" name="is_cancelled" value="yes">
-                    <?php endif; ?>
-                </div>
-                <?php endif; ?>
             </div>
             
-            <?php if (!$cancelling && !$is_cancelled): ?>
             <div class="ab-form-section">
                 <h3><i class="fas fa-file-pdf"></i> Poliçe Dökümanı</h3>
                 
@@ -539,49 +378,14 @@ if ($cancelling && !$is_cancelled) {
                     </div>
                 </div>
             </div>
-            <?php else: ?>
-                <input type="hidden" name="document_path" value="<?php echo isset($policy->document_path) ? esc_url($policy->document_path) : ''; ?>">
-                
-                <?php if (!empty($policy->document_path)): ?>
-                <div class="ab-form-section">
-                    <h3><i class="fas fa-file-pdf"></i> Poliçe Dökümanı</h3>
-                    
-                    <div class="ab-form-row">
-                        <div class="ab-form-group ab-full-width">
-                            <div class="ab-current-document">
-                                <div class="ab-document-header">
-                                    <i class="fas fa-file-pdf"></i> Mevcut Döküman
-                                </div>
-                                <div class="ab-document-content">
-                                    <a href="<?php echo esc_url($policy->document_path); ?>" target="_blank" class="ab-btn ab-btn-sm">
-                                        <i class="fas fa-file-pdf"></i> Dökümanı Görüntüle
-                                    </a>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-                <?php endif; ?>
-            <?php endif; ?>
             
             <div class="ab-form-actions">
                 <a href="?view=policies" class="ab-btn ab-btn-secondary">
-                    <i class="fas fa-times"></i> Vazgeç
+                    <i class="fas fa-times"></i> İptal
                 </a>
-                <?php if (!($is_cancelled && $editing)): ?>
                 <button type="submit" name="save_policy" class="ab-btn ab-btn-primary">
-                    <i class="fas fa-save"></i> 
-                    <?php 
-                        if ($editing) {
-                            echo 'Güncelle';
-                        } elseif ($cancelling) {
-                            echo 'İptal Kaydını Kaydet';
-                        } else {
-                            echo 'Kaydet';
-                        }
-                    ?>
+                    <i class="fas fa-save"></i> <?php echo $editing ? 'Güncelle' : 'Kaydet'; ?>
                 </button>
-                <?php endif; ?>
             </div>
         </div>
     </form>
@@ -639,45 +443,6 @@ if ($cancelling && !$is_cancelled) {
     transition: all 0.3s ease;
 }
 
-.ab-form-card-cancelled {
-    border: 2px solid #e53935;
-}
-
-.ab-cancelled-alert {
-    padding: 15px 20px;
-    background-color: #feecf0;
-    border: 2px solid #e53935;
-    border-radius: 6px;
-    margin-bottom: 20px;
-    display: flex;
-    align-items: flex-start;
-    gap: 15px;
-    animation: pulse 2s infinite;
-}
-
-@keyframes pulse {
-    0% { box-shadow: 0 0 0 0 rgba(229, 57, 53, 0.4); }
-    70% { box-shadow: 0 0 0 10px rgba(229, 57, 53, 0); }
-    100% { box-shadow: 0 0 0 0 rgba(229, 57, 53, 0); }
-}
-
-.ab-cancelled-alert i {
-    font-size: 24px;
-    color: #e53935;
-}
-
-.ab-cancelled-alert-content h3 {
-    margin: 0 0 10px 0;
-    color: #e53935;
-    font-size: 18px;
-    font-weight: 700;
-}
-
-.ab-cancelled-alert-content p {
-    margin: 5px 0;
-    font-size: 14px;
-}
-
 .ab-form-card:hover {
     box-shadow: 0 5px 15px rgba(0, 0, 0, 0.08);
 }
@@ -692,10 +457,6 @@ if ($cancelling && !$is_cancelled) {
     border-bottom: none;
 }
 
-.ab-cancellation-section {
-    background-color: #fff8f8;
-}
-
 .ab-form-section h3 {
     margin: 5px 0 20px 0;
     font-size: 18px;
@@ -708,14 +469,6 @@ if ($cancelling && !$is_cancelled) {
 
 .ab-form-section h3 i {
     color: #555;
-}
-
-.ab-cancellation-section h3 {
-    color: #e53935;
-}
-
-.ab-cancellation-section h3 i {
-    color: #e53935;
 }
 
 .ab-form-row {
@@ -840,88 +593,6 @@ if ($cancelling && !$is_cancelled) {
     gap: 6px;
 }
 
-/* İptal işlemi için ek stiller */
-.ab-cancel-warning {
-    padding: 15px 20px;
-    background-color: #feecf0;
-    border-left: 4px solid #e53935;
-    display: flex;
-    align-items: flex-start;
-    gap: 15px;
-    margin-bottom: 0;
-}
-
-.ab-cancel-warning i {
-    font-size: 24px;
-    color: #e53935;
-}
-
-.ab-cancel-warning-content h3 {
-    margin: 0 0 10px 0;
-    color: #e53935;
-    font-size: 18px;
-}
-
-.ab-cancel-warning-content p {
-    margin: 5px 0;
-    font-size: 14px;
-}
-
-.ab-cancel-option {
-    padding: 15px;
-    background-color: #f8f9fa;
-    border: 1px solid #e0e0e0;
-    border-radius: 4px;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-}
-
-.ab-cancel-label {
-    font-size: 16px;
-    font-weight: 500;
-    margin-left: 5px;
-}
-
-.ab-cancel-info {
-    padding: 12px;
-    background-color: #fff8e5;
-    border: 1px solid #ffc107;
-    border-radius: 4px;
-    display: flex;
-    align-items: flex-start;
-    gap: 10px;
-}
-
-.ab-cancel-info i {
-    color: #ffc107;
-    font-size: 18px;
-    margin-top: 2px;
-}
-
-.ab-cancel-info p {
-    margin: 5px 0;
-    font-size: 13px;
-}
-
-.ab-badge-cancelled {
-    background-color: #f3e5f5;
-    color: #9c27b0;
-}
-
-.ab-form-note {
-    margin-top: 5px;
-    font-size: 12px;
-    color: #2196f3;
-    display: flex;
-    align-items: center;
-    gap: 4px;
-}
-
-.ab-hidden {
-    display: none;
-}
-
 /* Daha fazla ekran boyutu için optimizasyon */
 @media (max-width: 992px) {
     .ab-form-row {
@@ -973,22 +644,11 @@ if ($cancelling && !$is_cancelled) {
     .ab-form-section h3 {
         font-size: 16px;
     }
-    
-    .ab-cancel-warning {
-        padding: 10px;
-        flex-direction: column;
-    }
-    
-    .ab-cancelled-alert {
-        padding: 10px;
-        flex-direction: column;
-    }
 }
 </style>
 
 <script>
 jQuery(document).ready(function($) {
-    // Tarih doğrulama
     $('#start_date, #end_date').change(function() {
         var startDate = $('#start_date').val();
         var endDate = $('#end_date').val();
@@ -999,7 +659,6 @@ jQuery(document).ready(function($) {
         }
     });
 
-    // Başlangıç tarihine göre bitiş tarihi ayarla
     $('#start_date').change(function() {
         var startDate = $(this).val();
         if (startDate) {
@@ -1011,10 +670,9 @@ jQuery(document).ready(function($) {
         }
     });
 
-    // Dosya yükleme kontrolü
     $('#document').change(function() {
         var file = this.files[0];
-        if (!file) return;
+        if(!file) return;
         
         var fileSize = file.size / 1024 / 1024;
         var fileType = file.name.split('.').pop().toLowerCase();
@@ -1031,7 +689,6 @@ jQuery(document).ready(function($) {
         }
     });
 
-    // Poliçe durumu değişikliği
     $('#status').change(function() {
         var status = $(this).val();
         var statusText = status === 'aktif' ? 'Aktif' : 'Pasif';
@@ -1042,7 +699,6 @@ jQuery(document).ready(function($) {
             .text(statusText);
     });
 
-    // Sigortalı aynı kişi mi kontrolü
     $('#same_as_insured').change(function() {
         var isSame = $(this).is(':checked');
         var customerName = $('#customer_id option:selected').text().split('(')[0].trim();
@@ -1057,57 +713,10 @@ jQuery(document).ready(function($) {
         }
     });
 
-    // Müşteri değişikliği kontrolü
     $('#customer_id').change(function() {
         var customerName = $(this).find('option:selected').text().split('(')[0].trim();
         if ($('#same_as_insured').is(':checked')) {
             $('#insured_party').val(customerName);
-        }
-    });
-
-    // İptal işlemi için detayları göster/gizle
-    $('#is_cancelled').change(function() {
-        if ($(this).is(':checked')) {
-            $('#cancellation-details').removeClass('ab-hidden');
-            $('#cancellation_date').attr('required', 'required');
-        } else {
-            $('#cancellation-details').addClass('ab-hidden');
-            $('#cancellation_date').removeAttr('required');
-        }
-    });
-    
-    // İptal tarihi kontrolü
-    $('#cancellation_date').change(function() {
-        var cancellationDate = new Date($(this).val());
-        var startDate = new Date($('#start_date').val());
-        var endDate = new Date($('#end_date').val());
-        var today = new Date();
-        
-        if (cancellationDate < startDate) {
-            alert('İptal tarihi, poliçe başlangıç tarihinden önce olamaz!');
-            $(this).val(today.toISOString().split('T')[0]);
-            return;
-        }
-        
-        if (cancellationDate > endDate) {
-            alert('İptal tarihi, poliçe bitiş tarihinden sonra olamaz!');
-            $(this).val(today.toISOString().split('T')[0]);
-            return;
-        }
-        
-        // İade edilecek prim tutarını hesapla
-        if ($('#refunded_amount').length) {
-            var totalDays = Math.round((endDate - startDate) / (1000 * 60 * 60 * 24));
-            var usedDays = Math.round((cancellationDate - startDate) / (1000 * 60 * 60 * 24));
-            var remainingDays = totalDays - usedDays;
-            
-            if (remainingDays > 0) {
-                var premiumAmount = parseFloat($('#premium_amount').val());
-                var refundAmount = (remainingDays / totalDays) * premiumAmount;
-                $('#refunded_amount').val(refundAmount.toFixed(2));
-            } else {
-                $('#refunded_amount').val('0.00');
-            }
         }
     });
 

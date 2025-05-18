@@ -1,4 +1,3 @@
-```php
 <?php
 if (!defined('ABSPATH')) {
     exit;
@@ -50,16 +49,14 @@ $customer_increase_rate = $total_customers > 0 ? ($new_customers / $total_custom
 
 $total_policies = $wpdb->get_var($wpdb->prepare(
     "SELECT COUNT(*) FROM {$wpdb->prefix}insurance_crm_policies 
-     WHERE representative_id = %d
-     AND cancellation_date IS NULL",
+     WHERE representative_id = %d",
     $representative->id
 ));
 
 $new_policies = $wpdb->get_var($wpdb->prepare(
     "SELECT COUNT(*) FROM {$wpdb->prefix}insurance_crm_policies 
      WHERE representative_id = %d 
-     AND start_date BETWEEN %s AND %s
-     AND cancellation_date IS NULL",
+     AND start_date BETWEEN %s AND %s",
     $representative->id,
     $this_month_start,
     $this_month_end
@@ -68,20 +65,16 @@ $new_policies = $new_policies ?: 0;
 $policy_increase_rate = $total_policies > 0 ? ($new_policies / $total_policies) * 100 : 0;
 
 $total_premium = $wpdb->get_var($wpdb->prepare(
-    "SELECT COALESCE(SUM(premium_amount), 0) - COALESCE(SUM(refunded_amount), 0)
-     FROM {$wpdb->prefix}insurance_crm_policies 
-     WHERE representative_id = %d
-     AND cancellation_date IS NULL",
+    "SELECT SUM(premium_amount) FROM {$wpdb->prefix}insurance_crm_policies 
+     WHERE representative_id = %d",
     $representative->id
 ));
 if ($total_premium === null) $total_premium = 0;
 
 $new_premium = $wpdb->get_var($wpdb->prepare(
-    "SELECT COALESCE(SUM(premium_amount), 0) - COALESCE(SUM(refunded_amount), 0)
-     FROM {$wpdb->prefix}insurance_crm_policies 
+    "SELECT SUM(premium_amount) FROM {$wpdb->prefix}insurance_crm_policies 
      WHERE representative_id = %d 
-     AND start_date BETWEEN %s AND %s
-     AND cancellation_date IS NULL",
+     AND start_date BETWEEN %s AND %s",
     $representative->id,
     $this_month_start,
     $this_month_end
@@ -94,11 +87,9 @@ $current_month_start = date('Y-m-01');
 $current_month_end = date('Y-m-t');
 
 $current_month_premium = $wpdb->get_var($wpdb->prepare(
-    "SELECT COALESCE(SUM(premium_amount), 0) - COALESCE(SUM(refunded_amount), 0)
-     FROM {$wpdb->prefix}insurance_crm_policies
+    "SELECT SUM(premium_amount) FROM {$wpdb->prefix}insurance_crm_policies
      WHERE representative_id = %d 
-     AND start_date BETWEEN %s AND %s
-     AND cancellation_date IS NULL",
+     AND start_date BETWEEN %s AND %s",
     $representative->id,
     $current_month_start . ' 00:00:00',
     $this_month_end . ' 23:59:59'
@@ -115,7 +106,6 @@ $recent_policies = $wpdb->get_results($wpdb->prepare(
      FROM {$wpdb->prefix}insurance_crm_policies p
      LEFT JOIN {$wpdb->prefix}insurance_crm_customers c ON p.customer_id = c.id
      WHERE p.representative_id = %d
-     AND p.cancellation_date IS NULL
      ORDER BY p.created_at DESC
      LIMIT 5",
     $representative->id
@@ -130,11 +120,10 @@ for ($i = 5; $i >= 0; $i--) {
 try {
     $actual_data = $wpdb->get_results($wpdb->prepare(
         "SELECT DATE_FORMAT(start_date, '%%Y-%%m') as month_year, 
-                COALESCE(SUM(premium_amount), 0) - COALESCE(SUM(refunded_amount), 0) as total
+                COALESCE(SUM(premium_amount), 0) as total
          FROM {$wpdb->prefix}insurance_crm_policies 
          WHERE representative_id = %d 
          AND start_date >= DATE_SUB(CURRENT_DATE(), INTERVAL 6 MONTH)
-         AND cancellation_date IS NULL
          GROUP BY month_year
          ORDER BY month_year ASC",
         $representative->id
@@ -167,7 +156,6 @@ $upcoming_renewals = $wpdb->get_results($wpdb->prepare(
      LEFT JOIN {$wpdb->prefix}insurance_crm_customers c ON p.customer_id = c.id
      WHERE p.representative_id = %d 
      AND p.end_date BETWEEN CURDATE() AND DATE_ADD(CURDATE(), INTERVAL 30 DAY)
-     AND p.cancellation_date IS NULL
      ORDER BY p.end_date ASC
      LIMIT 5",
     $representative->id
@@ -180,7 +168,6 @@ $expired_policies = $wpdb->get_results($wpdb->prepare(
      WHERE p.representative_id = %d 
      AND p.end_date < CURDATE()
      AND p.status != 'iptal'
-     AND p.cancellation_date IS NULL
      ORDER BY p.end_date DESC
      LIMIT 5",
     $representative->id
@@ -224,13 +211,15 @@ $upcoming_tasks = $wpdb->get_results($wpdb->prepare(
 $current_month_start = date('Y-m-01');
 $next_month_end = date('Y-m-t', strtotime('+1 month'));
 
+// Düzeltildi: Yer belirticileri 3 tane (%d, %s, %s) ve parametreler eşleştirildi
 $calendar_tasks = $wpdb->get_results($wpdb->prepare(
-    "SELECT DATE_FORMAT(DATE(due_date), '%Y-%m-%d') as task_date, COUNT(*) as task_count
+    "SELECT DATE_FORMAT(due_date, '%Y-%m-%d') as task_date, COUNT(*) as task_count
      FROM {$wpdb->prefix}insurance_crm_tasks
      WHERE representative_id = %d
      AND status IN ('pending', 'in_progress')
      AND due_date BETWEEN %s AND %s
-     GROUP BY DATE(due_date)",
+     GROUP BY DATE(due_date)
+     ORDER BY due_date ASC",
     $representative->id,
     $current_month_start . ' 00:00:00',
     $next_month_end . ' 23:59:59'
@@ -240,7 +229,7 @@ if ($wpdb->last_error) {
     error_log('Takvim Görev Sorgusu Hatası: ' . $wpdb->last_error);
 }
 
-error_log('Çekilen görevler: ' . print_r($calendar_tasks, true));
+error_log('Çekilen takvim görevleri: ' . print_r($calendar_tasks, true));
 
 $upcoming_tasks_list = $wpdb->get_results($wpdb->prepare(
     "SELECT t.*, c.first_name, c.last_name 
@@ -657,153 +646,116 @@ function insurance_crm_rep_panel_scripts() {
                         </div>
                     </div>
                     
-                    <?php
-                    $representative = $wpdb->get_row($wpdb->prepare(
-                        "SELECT * FROM {$wpdb->prefix}insurance_crm_representatives 
-                         WHERE user_id = %d AND status = 'active'",
-                        get_current_user_id()
-                    ));
+                    <link href="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.15/index.global.min.css" rel="stylesheet">
+                    <script src="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.15/index.global.min.js"></script>
 
-                    if (!$representative) {
-                        echo '<div class="ab-notice ab-error">Müşteri temsilcisi kaydınız bulunamadı veya hesabınız pasif durumda.</div>';
-                    } else {
-                        $current_month_start = date('Y-m-01');
-                        $next_month_end = date('Y-m-t', strtotime('+1 month'));
-
-                        $calendar_tasks = $wpdb->get_results($wpdb->prepare(
-                            "SELECT DATE_FORMAT(DATE(due_date), '%Y-%m-%d') as task_date, COUNT(*) as task_count
-                             FROM {$wpdb->prefix}insurance_crm_tasks
-                             WHERE representative_id = %d
-                             AND status IN ('pending', 'in_progress')
-                             AND due_date BETWEEN %s AND %s
-                             GROUP BY DATE(due_date)",
-                            $representative->id,
-                            $current_month_start . ' 00:00:00',
-                            $next_month_end . ' 23:59:59'
-                        ));
-
-                        if ($wpdb->last_error) {
-                            error_log('Takvim Görev Sorgusu Hatası: ' . $wpdb->last_error);
-                        }
-
-                        error_log('Çekilen görevler: ' . print_r($calendar_tasks, true));
-
-                        $upcoming_tasks_list = $wpdb->get_results($wpdb->prepare(
-                            "SELECT t.*, c.first_name, c.last_name 
-                             FROM {$wpdb->prefix}insurance_crm_tasks t
-                             LEFT JOIN {$wpdb->prefix}insurance_crm_customers c ON t.customer_id = c.id
-                             WHERE t.representative_id = %d 
-                             AND t.status IN ('pending', 'in_progress')
-                             AND t.due_date BETWEEN %s AND %s
-                             ORDER BY t.due_date ASC
-                             LIMIT 5",
-                            $representative->id,
-                            $current_month_start . ' 00:00:00',
-                            $next_month_end . ' 23:59:59'
-                        ));
-
-                        if ($wpdb->last_error) {
-                            error_log('Yaklaşan Görevler Sorgusu Hatası: ' . $wpdb->last_error);
-                        }
-
-                        error_log('Yaklaşan görevler listesi: ' . print_r($upcoming_tasks_list, true));
-                    ?>
-                        <link href="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.15/index.global.min.css" rel="stylesheet">
-                        <script src="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.15/index.global.min.js"></script>
-
-                        <div class="dashboard-card calendar-card">
-                            <div class="card-header">
-                                <h3>Görev Takvimi</h3>
-                                <div class="card-actions">
-                                    <a href="?view=tasks" class="text-button">Tüm Görevler</a>
-                                    <a href="?view=tasks&action=new" class="card-option" title="Yeni Görev">
-                                        <i class="dashicons dashicons-plus-alt"></i>
-                                    </a>
-                                </div>
-                            </div>
-                            <div class="card-body">
-                                <div id="calendar"></div>
-                                <?php if (!empty($upcoming_tasks_list)): ?>
-                                    <div style="margin-top: 20px;">
-                                        <h4>Yaklaşan Görevler</h4>
-                                        <ul class="task-list">
-                                            <?php foreach ($upcoming_tasks_list as $task): ?>
-                                                <li class="task-item">
-                                                    <strong><?php echo date_i18n('d.m.Y', strtotime($task->due_date)); ?>:</strong>
-                                                    <?php echo esc_html($task->task_description); ?>
-                                                    <?php if ($task->first_name || $task->last_name): ?>
-                                                        (<?php echo esc_html($task->first_name . ' ' . $task->last_name); ?>)
-                                                    <?php endif; ?>
-                                                    <a href="?view=tasks&due_date=<?php echo date('Y-m-d', strtotime($task->due_date)); ?>" class="task-link">Göreve Git</a>
-                                                </li>
-                                            <?php endforeach; ?>
-                                        </ul>
-                                    </div>
-                                <?php else: ?>
-                                    <div style="text-align: center; margin-top: 20px;">
-                                        <p>Bu ay veya gelecek ay için görev bulunmamaktadır.</p>
-                                        <a href="?view=tasks&action=new" class="button button-primary">Yeni Görev Ekle</a>
-                                    </div>
-                                <?php endif; ?>
+                    <div class="dashboard-card calendar-card">
+                        <div class="card-header">
+                            <h3>Görev Takvimi</h3>
+                            <div class="card-actions">
+                                <a href="?view=tasks" class="text-button">Tüm Görevler</a>
+                                <a href="?view=tasks&action=new" class="card-option" title="Yeni Görev">
+                                    <i class="dashicons dashicons-plus-alt"></i>
+                                </a>
                             </div>
                         </div>
-
-                        <script>
-                        document.addEventListener('DOMContentLoaded', function() {
-                            console.log('FullCalendar yükleniyor...');
-                            if (typeof FullCalendar === 'undefined') {
-                                console.error('FullCalendar kütüphanesi yüklenmedi. CDN veya yerel dosya yollarını kontrol edin.');
-                                return;
-                            }
-
-                            const calendarEl = document.getElementById('calendar');
-                            if (calendarEl) {
-                                console.log('Takvim elementi bulundu:', calendarEl);
-                                const calendar = new FullCalendar.Calendar(calendarEl, {
-                                    initialView: 'dayGridMonth',
-                                    headerToolbar: {
-                                        left: 'prev,next',
-                                        center: 'title',
-                                        right: ''
-                                    },
-                                    events: [],
-                                    dayCellContent: function(info) {
-                                        const dateStr = info.date.toISOString().split('T')[0];
-                                        let taskCount = 0;
-                                        console.log('Takvim tarihi:', dateStr);
-                                        <?php foreach ($calendar_tasks as $task): ?>
-                                            console.log('Görev tarihi:', '<?php echo $task->task_date; ?>');
-                                            if ('<?php echo $task->task_date; ?>' === dateStr) {
-                                                taskCount = <?php echo $task->task_count; ?>;
-                                            }
+                        <div class="card-body">
+                            <div id="calendar"></div>
+                            <?php if (!empty($upcoming_tasks_list)): ?>
+                                <div style="margin-top: 20px;">
+                                    <h4>Yaklaşan Görevler</h4>
+                                    <ul class="task-list">
+                                        <?php foreach ($upcoming_tasks_list as $task): ?>
+                                            <li class="task-item">
+                                                <strong><?php echo date_i18n('d.m.Y', strtotime($task->due_date)); ?></strong>
+                                                <?php echo esc_html($task->task_description); ?>
+                                                <?php if ($task->first_name || $task->last_name): ?>
+                                                    (<?php echo esc_html($task->first_name . ' ' . $task->last_name); ?>)
+                                                <?php endif; ?>
+                                                <a href="?view=tasks&due_date=<?php echo date('Y-m-d', strtotime($task->due_date)); ?>" class="task-link">Göreve Git</a>
+                                            </li>
                                         <?php endforeach; ?>
-                                        console.log('Görev sayısı:', taskCount);
-                                        return {
-                                            html: `
-                                                <div class="fc-daygrid-day-frame">
-                                                    <div class="fc-daygrid-day-top">
-                                                        <a href="#" class="fc-daygrid-day-number" data-date="${dateStr}">${info.dayNumberText}</a>
-                                                    </div>
-                                                    <div class="fc-daygrid-day-events">
-                                                        ${taskCount > 0 ? `<a href="?view=tasks&due_date=${dateStr}" class="fc-task-count">Görev: ${taskCount}</a>` : ''}
-                                                    </div>
-                                                </div>
-                                            `
-                                        };
-                                    },
-                                    dateClick: function(info) {
-                                        const dateStr = info.dateStr;
-                                        window.location.href = `?view=tasks&due_date=${dateStr}`;
+                                    </ul>
+                                </div>
+                            <?php else: ?>
+                                <div style="text-align: center; margin-top: 20px;">
+                                    <p>Bu ay veya gelecek ay için görev bulunmamaktadır.</p>
+                                    <a href="?view=tasks&action=new" class="button button-primary">Yeni Görev Ekle</a>
+                                </div>
+                            <?php endif; ?>
+                        </div>
+                    </div>
+
+                    <script>
+                    document.addEventListener('DOMContentLoaded', function() {
+                        console.log('FullCalendar yükleniyor...');
+                        if (typeof FullCalendar === 'undefined') {
+                            console.error('FullCalendar kütüphanesi yüklenmedi. CDN veya yerel dosya yollarını kontrol edin.');
+                            return;
+                        }
+
+                        const calendarEl = document.getElementById('calendar');
+                        if (!calendarEl) {
+                            console.error('Takvim elementi (#calendar) bulunamadı.');
+                            return;
+                        }
+
+                        const tasks = <?php echo json_encode($calendar_tasks ?: []); ?>;
+                        console.log('Görevler:', tasks);
+
+                        if (!Array.isArray(tasks)) {
+                            console.error('Görevler bir dizi değil:', tasks);
+                            return;
+                        }
+
+                        const calendar = new FullCalendar.Calendar(calendarEl, {
+                            initialView: 'dayGridMonth',
+                            headerToolbar: {
+                                left: 'prev,next',
+                                center: 'title',
+                                right: ''
+                            },
+                            locale: 'tr',
+                            weekends: true, // Haftasonlarını göster
+                            events: tasks.map(task => ({
+                                title: `${task.task_count} Göreviniz Var`,
+                                start: task.task_date,
+                                url: `?view=tasks&due_date=${task.task_date}`
+                            })),
+                            dayCellContent: function(info) {
+                                const dateStr = info.date.toISOString().split('T')[0];
+                                let taskCount = 0;
+
+                                tasks.forEach(task => {
+                                    const cleanTaskDate = task.task_date.trim(); // Tarih sonunda : varsa temizle
+                                    if (cleanTaskDate === dateStr) {
+                                        taskCount = parseInt(task.task_count);
                                     }
                                 });
-                                calendar.render();
-                                console.log('Takvim render edildi.');
-                            } else {
-                                console.error('Takvim elementi (#calendar) bulunamadı.');
+
+                                return {
+                                    html: `
+                                        <div class="fc-daygrid-day-frame">
+                                            <div class="fc-daygrid-day-top">
+                                                <a href="?view=tasks&due_date=${dateStr}" class="fc-daygrid-day-number">${info.dayNumberText}</a>
+                                            </div>
+                                            <div class="fc-daygrid-day-events">
+                                                ${taskCount > 0 ? `<a href="?view=tasks&due_date=${dateStr}" class="fc-task-count">${taskCount} Göreviniz Var</a>` : ''}
+                                            </div>
+                                        </div>
+                                    `
+                                };
+                            },
+                            dateClick: function(info) {
+                                const dateStr = info.dateStr;
+                                window.location.href = `?view=tasks&due_date=${dateStr}`;
                             }
                         });
-                        </script>
-                    <?php } ?>
+
+                        calendar.render();
+                        console.log('Takvim render edildi.');
+                    });
+                    </script>
                 </div>
                 
                 <div class="lower-section">
@@ -1677,12 +1629,12 @@ function insurance_crm_rep_panel_scripts() {
             }
             
             .dashboard-grid .upper-section .dashboard-card.chart-card {
-                width: 65%; /* Aylık Üretim Performansı tablosunun genişliği */
+                width: 65%;
                 flex-shrink: 0;
             }
             
             .dashboard-grid .upper-section .dashboard-card.calendar-card {
-                width: 35%; /* Takvimin genişliği */
+                width: 35%;
                 flex-shrink: 0;
             }
             
@@ -1766,11 +1718,11 @@ function insurance_crm_rep_panel_scripts() {
             }
             
             #calendar {
-                width: 100%; /* Takvimin genişliği */
-                height: 500px; /* Takvimin yüksekliğini küçülttük */
+                width: 100%;
+                height: 500px;
                 margin: 0 auto;
                 visibility: visible;
-                font-size: 12px; /* Genel yazı boyutunu küçülttük */
+                font-size: 12px;
             }
             
             .fc {
@@ -1778,13 +1730,17 @@ function insurance_crm_rep_panel_scripts() {
             }
             
             .fc-scroller {
-                overflow-y: hidden !important; /* Takvimde aşağı kaydırmayı engelledik */
+                overflow-y: hidden !important;
             }
             
             .fc-daygrid-day {
                 position: relative;
-                height: 30px; /* Hücre yüksekliğini küçülttük */
-                width: 30px;	
+                height: 30px;
+                width: 30px;
+            }
+            
+            .fc-day-sat, .fc-day-sun {
+                display: table-cell !important; /* Haftasonlarını görünür yap */
             }
             
             .fc-daygrid-day-frame {
@@ -1796,13 +1752,13 @@ function insurance_crm_rep_panel_scripts() {
             }
             
             .fc-daygrid-day-top {
-                margin-bottom: 2px; /* Tarih ile görev adedi arasında boşluk */
+                margin-bottom: 2px;
             }
             
             .fc-daygrid-day-number {
                 color: #333;
                 text-decoration: none;
-                font-size: 10px; /* Tarih yazı boyutunu küçülttük */
+                font-size: 10px;
             }
             
             .fc-daygrid-day-events {
@@ -1814,7 +1770,7 @@ function insurance_crm_rep_panel_scripts() {
                 color: #fff;
                 border-radius: 10px;
                 padding: 1px 4px;
-                font-size: 9px; /* Görev adedi yazı boyutunu küçülttük */
+                font-size: 9px;
                 display: inline-block;
                 text-decoration: none;
             }
@@ -1824,11 +1780,11 @@ function insurance_crm_rep_panel_scripts() {
             }
             
             .fc-header-toolbar {
-                font-size: 12px; /* Başlık yazı boyutunu küçülttük */
+                font-size: 12px;
             }
             
             .fc-button {
-                padding: 2px 5px; /* Buton boyutlarını küçülttük */
+                padding: 2px 5px;
                 font-size: 10px;
             }
             
@@ -1911,8 +1867,8 @@ function insurance_crm_rep_panel_scripts() {
             }
             
             .days-overdue {
-                font-weight: 500;
-                color: #dc3545;
+                font-weight:
+color: #dc3545;
             }
             
             .user-info-cell {
@@ -2165,16 +2121,16 @@ function insurance_crm_rep_panel_scripts() {
                 }
                 
                 #calendar .fc-daygrid-day {
-                    font-size: 10px; /* Küçük ekranlarda takvim hücrelerini daha da küçülttük */
+                    font-size: 10px;
                 }
                 
                 .fc-task-count {
-                    font-size: 8px; /* Görev adedi yazı boyutunu daha da küçülttük */
+                    font-size: 8px;
                     padding: 0px 3px;
                 }
                 
                 .fc-daygrid-day-number {
-                    font-size: 8px; /* Tarih yazı boyutunu daha da küçülttük */
+                    font-size: 8px;
                 }
             }
             
@@ -2218,7 +2174,7 @@ function insurance_crm_rep_panel_scripts() {
                 }
                 
                 #calendar .fc-daygrid-day-number {
-                    font-size: 7px; /* Çok küçük ekranlarda tarih yazı boyutunu daha da küçülttük */
+                    font-size: 7px;
                 }
                 
                 .fc-task-count {
@@ -2227,7 +2183,7 @@ function insurance_crm_rep_panel_scripts() {
                 }
             }
         </style>
-        
+
         <script>
         document.addEventListener('DOMContentLoaded', function() {
             // SideNav Toggle
@@ -2293,7 +2249,13 @@ function insurance_crm_rep_panel_scripts() {
             // Production Chart
             const productionChartCanvas = document.querySelector('#productionChart');
             if (productionChartCanvas) {
-                const monthlyProduction = <?php echo json_encode($monthly_production); ?>;
+                const monthlyProduction = <?php echo json_encode($monthly_production ?: []); ?>;
+                console.log('Aylık Üretim:', monthlyProduction); // Debug için
+                
+                if (!Array.isArray(monthlyProduction)) {
+                    console.error('Aylık üretim verisi bir dizi değil:', monthlyProduction);
+                    return;
+                }
                 
                 const labels = monthlyProduction.map(item => {
                     const [year, month] = item.month.split('-');
@@ -2390,61 +2352,9 @@ function insurance_crm_rep_panel_scripts() {
                     }
                 });
             }
-
-            // Takvim için ek hata ayıklama
-            console.log('Takvim kontrol ediliyor...');
-            const calendarEl = document.getElementById('calendar');
-            if (!calendarEl) {
-                console.error('Takvim elementi (#calendar) bulunamadı. HTML çıktısını kontrol edin.');
-            } else {
-                console.log('Takvim elementi mevcut:', calendarEl);
-                if (typeof FullCalendar === 'undefined') {
-                    console.error('FullCalendar kütüphanesi yüklenmedi. CDN veya yerel dosya yollarını kontrol edin.');
-                } else {
-                    const calendar = new FullCalendar.Calendar(calendarEl, {
-                        initialView: 'dayGridMonth',
-                        headerToolbar: {
-                            left: 'prev,next',
-                            center: 'title',
-                            right: ''
-                        },
-                        events: [],
-                        dayCellContent: function(info) {
-                            const dateStr = info.date.toISOString().split('T')[0];
-                            let taskCount = 0;
-                            console.log('Takvim tarihi:', dateStr);
-                            <?php foreach ($calendar_tasks as $task): ?>
-                                console.log('Görev tarihi:', '<?php echo $task->task_date; ?>');
-                                if ('<?php echo $task->task_date; ?>' === dateStr) {
-                                    taskCount = <?php echo $task->task_count; ?>;
-                                }
-                            <?php endforeach; ?>
-                            console.log('Görev sayısı:', taskCount);
-                            return {
-                                html: `
-                                    <div class="fc-daygrid-day-frame">
-                                        <div class="fc-daygrid-day-top">
-                                            <a href="#" class="fc-daygrid-day-number" data-date="${dateStr}">${info.dayNumberText}</a>
-                                        </div>
-                                        <div class="fc-daygrid-day-events">
-                                            ${taskCount > 0 ? `<a href="?view=tasks&due_date=${dateStr}" class="fc-task-count">Görev: ${taskCount}</a>` : ''}
-                                        </div>
-                                    </div>
-                                `
-                            };
-                        },
-                        dateClick: function(info) {
-                            const dateStr = info.dateStr;
-                            window.location.href = `?view=tasks&due_date=${dateStr}`;
-                        }
-                    });
-                    calendar.render();
-                    console.log('Takvim render edildi.');
-                }
-            }
         });
         </script>
-        
+
         <?php wp_footer(); ?>
     </body>
 </html>

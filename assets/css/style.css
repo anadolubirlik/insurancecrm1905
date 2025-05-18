@@ -143,3 +143,7 @@
 .insurance-crm-button-danger:hover {
     background-color: #b32d2e;
 }
+
+#wpadminbar {
+    display: none !important;
+}

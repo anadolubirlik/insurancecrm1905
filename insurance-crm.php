@@ -112,7 +112,6 @@ function insurance_crm_create_tables() {
     global $wpdb;
     $charset_collate = $wpdb->get_charset_collate();
 
-    $table_customers = $wpdb->prefix . 'insurance_crm_customers';
     $sql_customers = "CREATE TABLE IF NOT EXISTS $table_customers (
         id bigint(20) NOT NULL AUTO_INCREMENT,
         first_name varchar(100) NOT NULL,
@@ -124,6 +123,30 @@ function insurance_crm_create_tables() {
         category varchar(20) DEFAULT 'bireysel',
         status varchar(20) DEFAULT 'aktif',
         representative_id bigint(20) DEFAULT NULL,
+        birth_date DATE DEFAULT NULL,
+        gender varchar(10) DEFAULT NULL,
+        is_pregnant TINYINT(1) DEFAULT 0,
+        pregnancy_week INT DEFAULT NULL,
+        occupation varchar(100) DEFAULT NULL,
+        marital_status varchar(50) DEFAULT NULL,
+        spouse_name varchar(100) DEFAULT NULL,
+        spouse_tc_identity varchar(11) DEFAULT NULL,
+        spouse_birth_date DATE DEFAULT NULL,
+        children_count INT DEFAULT 0,
+        children_names TEXT DEFAULT NULL,
+        children_birth_dates TEXT DEFAULT NULL,
+        children_tc_identities TEXT DEFAULT NULL,
+        has_vehicle TINYINT(1) DEFAULT 0,
+        vehicle_plate varchar(20) DEFAULT NULL,
+        has_pet TINYINT(1) DEFAULT 0,
+        pet_name varchar(50) DEFAULT NULL,
+        pet_type varchar(50) DEFAULT NULL,
+        pet_age varchar(20) DEFAULT NULL,
+        owns_home TINYINT(1) DEFAULT 0,
+        has_dask_policy TINYINT(1) DEFAULT 0,
+        dask_policy_expiry DATE DEFAULT NULL,
+        has_home_policy TINYINT(1) DEFAULT 0,
+        home_policy_expiry DATE DEFAULT NULL,
         created_at datetime DEFAULT CURRENT_TIMESTAMP,
         updated_at datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
         PRIMARY KEY  (id),
@@ -252,6 +275,7 @@ function insurance_crm_check_db_tables() {
         insurance_crm_create_tables();
     }
 }
+
 add_action('plugins_loaded', 'insurance_crm_check_db_tables');
 
 /**

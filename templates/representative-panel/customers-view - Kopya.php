@@ -447,13 +447,9 @@ function format_file_size($size) {
                     <div class="ab-info-item">
                         <div class="ab-info-label">E-posta</div>
                         <div class="ab-info-value">
-                            <?php if (!empty($customer->email)): ?>
                             <a href="mailto:<?php echo esc_attr($customer->email); ?>">
                                 <i class="fas fa-envelope"></i> <?php echo esc_html($customer->email); ?>
                             </a>
-                            <?php else: ?>
-                            <span class="no-value">E-posta Bilgisi Eksik</span>
-                            <?php endif; ?>
                         </div>
                     </div>
                     <div class="ab-info-item">
@@ -473,46 +469,16 @@ function format_file_size($size) {
                         <div class="ab-info-value">
                             <?php echo !empty($customer->birth_date) ? date('d.m.Y', strtotime($customer->birth_date)) : '<span class="no-value">Belirtilmemiş</span>'; ?>
                         </div>
-                    </div>
 
-                    <div class="ab-info-item">
+<div class="ab-info-item ab-full-width">
                         <div class="ab-info-label">Cinsiyet</div>
-                        <div class="ab-info-value">
-                            <?php 
-                            if (!empty($customer->gender)) {
-                                if ($customer->gender === 'male') {
-                                    echo 'Erkek';
-                                } elseif ($customer->gender === 'female') {
-                                    echo 'Kadın';
-                                } else {
-                                    echo esc_html($customer->gender);
-                                }
-                            } else {
-                                echo '<span class="no-value">Belirtilmemiş</span>';
-                            }
-                            ?>
-                        </div>
+                        <div class="ab-info-value"><?php echo nl2br(esc_html($customer->gender)); ?></div>
                     </div>
 
-                    <div class="ab-info-item">
-                        <div class="ab-info-label">Medeni Durum</div>
-                        <div class="ab-info-value">
-                            <?php 
-                            if (!empty($customer->marital_status)) {
-                                if ($customer->marital_status === 'single') {
-                                    echo 'Bekar';
-                                } elseif ($customer->marital_status === 'married') {
-                                    echo 'Evli';
-                                } else {
-                                    echo esc_html($customer->marital_status);
-                                }
-                            } else {
-                                echo '<span class="no-value">Belirtilmemiş</span>';
-                            }
-                            ?>
-                        </div>
-                    </div>
 
+
+
+                    </div>
                     <div class="ab-info-item">
                         <div class="ab-info-label">Meslek</div>
                         <div class="ab-info-value">
@@ -1058,7 +1024,7 @@ function format_file_size($size) {
                             </div>
                             <div class="ab-note-content">
                                 <?php echo nl2br(esc_html($note->note_content)); ?>
-                                                       </div>
+                            </div>
                             <?php if (!empty($note->rejection_reason)): ?>
                             <div class="ab-note-reason">
                                 <strong>Sebep:</strong> 
@@ -2557,7 +2523,7 @@ jQuery(document).ready(function($) {
             content += '<div class="ab-file-size-preview">' + fileSize + '</div>';
             
             if (!isValidType) {
-                content += '<div class="ab-file-error"><i class="fas fa-exclamation-triangle"></i> Geçersiz dosya formatı. Sadece ' + allowedExtensions.map(ext => ext.toUpperCase()).join(', ') + ' desteklenir.</div>';
+                content += '<div class="ab-file-error"><i class="fas fa-exclamation-triangle"></i> Geçersiz dosya formatı. Sadece ' + allowedExtensions.map(ext => ext.toUpperCase()).join(', ') + ' dosyaları yüklenebilir.</div>';
             } else if (!isValidSize) {
                 content += '<div class="ab-file-error"><i class="fas fa-exclamation-triangle"></i> Dosya boyutu çok büyük. Maksimum 5MB olmalıdır.</div>';
             } else {
@@ -2786,7 +2752,7 @@ jQuery(document).ready(function($) {
         }
         
         var actions = $('<div class="ab-file-card-actions"></div>');
-        actions.append('<a href="' + file.path + '" target="_blank" class="ab-btn ab-btn-sm ab-btn-primary"><i class="fas ' + (file.type === 'jpg' || file.type === 'jpeg' || file.type === 'png' ? 'fa-eye' : 'fa-download') + '"></i> ' + (file.type === 'jpg' || file.type === 'jpeg' || file.type === 'png' ? 'Görüntüle' : 'İndir') + '</a>');
+        actions.append('<a href="' + file.path + '" target="_blank" class="ab-btn ab-btn-sm ab-btn-primary"><i class="fas ' + (file.type === 'jpg' || file.type === 'jpeg' || file.type === 'png' ? 'fa-eye' : 'fa-download') + '"></i>' + (file.type === 'jpg' || file.type === 'jpeg' || file.type === 'png' ? 'Görüntüle' : 'İndir') + '</a>');
         actions.append('<button type="button" class="ab-btn ab-btn-sm ab-btn-danger delete-file" data-file-id="' + file.id + '"><i class="fas fa-trash"></i> Sil</button>');
         
         fileCard.append(actions);
