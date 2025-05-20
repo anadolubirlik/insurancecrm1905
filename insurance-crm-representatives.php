@@ -6,12 +6,30 @@
  * @subpackage Insurance_CRM/admin/partials
  * @author     Anadolu Birlik
  * @since      1.0.3
- * @version    1.0.6
+ * @version    1.0.7
  */
 
 if (!defined('WPINC')) {
     die;
 }
+
+// Veritabanı güncelleme işlemi - Hedef Poliçe Adedi alanı ekleme
+function insurance_crm_add_target_policy_count_field() {
+    global $wpdb;
+    $table_name = $wpdb->prefix . 'insurance_crm_representatives';
+    
+    // Sütun var mı kontrol et
+    $column_exists = $wpdb->get_results("SHOW COLUMNS FROM {$table_name} LIKE 'target_policy_count'");
+    
+    if(empty($column_exists)) {
+        // Sütun yoksa ekle
+        $wpdb->query("ALTER TABLE {$table_name} ADD COLUMN `target_policy_count` INT NOT NULL DEFAULT 0 AFTER `monthly_target`;");
+        error_log('Hedef Poliçe Adedi alanı veritabanına eklendi.');
+    }
+}
+
+// Veritabanını güncelle
+insurance_crm_add_target_policy_count_field();
 
 // Sekme yönetimi
 $active_tab = isset($_GET['tab']) ? sanitize_text_field($_GET['tab']) : 'representatives';
@@ -95,6 +113,7 @@ if (isset($_POST['submit_representative']) && isset($_POST['representative_nonce
             'phone' => sanitize_text_field($_POST['phone']),
             'department' => sanitize_text_field($_POST['department']),
             'monthly_target' => floatval($_POST['monthly_target']),
+            'target_policy_count' => intval($_POST['target_policy_count']), // Yeni alan
             'updated_at' => current_time('mysql')
         );
         
@@ -183,6 +202,7 @@ if (isset($_POST['submit_representative']) && isset($_POST['representative_nonce
                             'phone' => sanitize_text_field($_POST['phone']),
                             'department' => sanitize_text_field($_POST['department']),
                             'monthly_target' => floatval($_POST['monthly_target']),
+                            'target_policy_count' => intval($_POST['target_policy_count']), // Yeni alan
                             'status' => 'active',
                             'created_at' => current_time('mysql'),
                             'updated_at' => current_time('mysql')
@@ -367,13 +387,14 @@ $management_hierarchy = isset($settings['management_hierarchy']) ? $settings['ma
                     <th>Telefon</th>
                     <th>Departman</th>
                     <th>Aylık Hedef</th>
+                    <th>Hedef Poliçe Adedi</th>
                     <th>İşlemler</th>
                 </tr>
             </thead>
             <tbody>
                 <?php if (empty($representatives)): ?>
                     <tr>
-                        <td colspan="8">Hiç müşteri temsilcisi bulunamadı.</td>
+                        <td colspan="9">Hiç müşteri temsilcisi bulunamadı.</td>
                     </tr>
                 <?php else: ?>
                     <?php foreach ($representatives as $rep): ?>
@@ -385,6 +406,7 @@ $management_hierarchy = isset($settings['management_hierarchy']) ? $settings['ma
                         <td><?php echo esc_html($rep->phone); ?></td>
                         <td><?php echo esc_html($rep->department); ?></td>
                         <td>₺<?php echo number_format($rep->monthly_target, 2); ?></td>
+                        <td><?php echo isset($rep->target_policy_count) ? intval($rep->target_policy_count) : 0; ?> Adet</td>
                         <td>
                             <a href="<?php echo esc_url(admin_url('admin.php?page=insurance-crm-representatives&action=edit&id=' . $rep->id)); ?>" 
                                class="button button-small">
@@ -782,6 +804,14 @@ $management_hierarchy = isset($settings['management_hierarchy']) ? $settings['ma
                             <input type="number" step="0.01" min="0" name="monthly_target" id="monthly_target" class="regular-text" required
                                    value="<?php echo $editing ? esc_attr($edit_rep->monthly_target) : ''; ?>">
                             <p class="description">Temsilcinin aylık satış hedefi (₺)</p>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th><label for="target_policy_count">Hedef Poliçe Adedi <span class="required">*</span></label></th>
+                        <td>
+                            <input type="number" step="1" min="0" name="target_policy_count" id="target_policy_count" class="regular-text" required
+                                   value="<?php echo $editing && isset($edit_rep->target_policy_count) ? intval($edit_rep->target_policy_count) : '0'; ?>">
+                            <p class="description">Temsilcinin aylık hedef poliçe adedi</p>
                         </td>
                     </tr>
                 </table>
