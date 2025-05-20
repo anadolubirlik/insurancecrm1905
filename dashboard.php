@@ -1183,7 +1183,10 @@ function insurance_crm_rep_panel_scripts() {
                         <?php 
                         $team_id = str_replace('team_', '', $view_filter);
                         $team_name = '';
-                        foreach ($all_teams as $team) {
+                        
+		if (!empty($all_teams) && (is_array($all_teams) || is_object($all_teams))) {
+	    	foreach ($all_teams as $team) {
+		
                             if ($team['id'] == $team_id) {
                                 $team_name = $team['name'];
                                 break;
@@ -5662,6 +5665,8 @@ function insurance_crm_rep_panel_scripts() {
         });
         </script>
         
-        <?php wp_footer(); ?>
+  <?php endif; ?>
+        <?php endif; ?>
+    <?php wp_footer(); ?>
     </body>
 </html>
