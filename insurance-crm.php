@@ -25,6 +25,34 @@ if (!defined('WPINC')) {
 }
 
 /**
+ * Teklif bilgileri için sütunların doğrudan eklenmesini sağla
+ * Bu fonksiyon her sayfa yüklenişinde çalışır ve sütunların var olup olmadığını kontrol eder
+ */
+function force_update_crm_db() {
+    global $wpdb;
+    $table_name = $wpdb->prefix . 'insurance_crm_customers';
+    
+    // Tablonun var olduğundan emin olalım
+    if ($wpdb->get_var("SHOW TABLES LIKE '$table_name'") != $table_name) {
+        return; // Tablo yoksa bir şey yapma
+    }
+    
+    // has_offer sütununu doğrudan kontrol et
+    $column_exists = $wpdb->get_results("SHOW COLUMNS FROM `{$table_name}` LIKE 'has_offer'");
+    
+    // Sütun yoksa ekle
+    if (empty($column_exists)) {
+        $wpdb->query("ALTER TABLE `{$table_name}` ADD COLUMN `has_offer` TINYINT(1) DEFAULT 0");
+        $wpdb->query("ALTER TABLE `{$table_name}` ADD COLUMN `offer_insurance_type` VARCHAR(100) DEFAULT NULL");
+        $wpdb->query("ALTER TABLE `{$table_name}` ADD COLUMN `offer_amount` DECIMAL(10,2) DEFAULT NULL");
+        $wpdb->query("ALTER TABLE `{$table_name}` ADD COLUMN `offer_expiry_date` DATE DEFAULT NULL");
+        $wpdb->query("ALTER TABLE `{$table_name}` ADD COLUMN `offer_notes` TEXT DEFAULT NULL");
+    }
+}
+// Her sayfa yüklendiğinde bu fonksiyonu çalıştır - böylece sütunların varlığından emin oluruz
+add_action('init', 'force_update_crm_db', 5);
+
+/**
  * Plugin version.
  */
 define('INSURANCE_CRM_VERSION', '1.1.3');
@@ -111,6 +139,9 @@ register_activation_hook(__FILE__, 'insurance_crm_add_capabilities');
 function insurance_crm_create_tables() {
     global $wpdb;
     $charset_collate = $wpdb->get_charset_collate();
+    
+    // Tablo adını doğru şekilde tanımla (Bu değişkende eksiklik vardı)
+    $table_customers = $wpdb->prefix . 'insurance_crm_customers';
 
     $sql_customers = "CREATE TABLE IF NOT EXISTS $table_customers (
         id bigint(20) NOT NULL AUTO_INCREMENT,
@@ -147,6 +178,11 @@ function insurance_crm_create_tables() {
         dask_policy_expiry DATE DEFAULT NULL,
         has_home_policy TINYINT(1) DEFAULT 0,
         home_policy_expiry DATE DEFAULT NULL,
+        has_offer TINYINT(1) DEFAULT 0,
+        offer_insurance_type VARCHAR(100) DEFAULT NULL,
+        offer_amount DECIMAL(10,2) DEFAULT NULL,
+        offer_expiry_date DATE DEFAULT NULL,
+        offer_notes TEXT DEFAULT NULL,
         created_at datetime DEFAULT CURRENT_TIMESTAMP,
         updated_at datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
         PRIMARY KEY  (id),
@@ -274,6 +310,9 @@ function insurance_crm_check_db_tables() {
     if (!empty($missing_tables)) {
         insurance_crm_create_tables();
     }
+    
+    // Her durumda teklif alanlarının olduğundan emin olalım
+    force_update_crm_db();
 }
 
 add_action('plugins_loaded', 'insurance_crm_check_db_tables');
@@ -994,7 +1033,12 @@ function insurance_crm_check_customer_db_updates() {
         'has_daskel_policy' => "ALTER TABLE $table_name ADD COLUMN IF NOT EXISTS has_dask_policy TINYINT(1) DEFAULT 0",
         'dask_policy_expiry' => "ALTER TABLE $table_name ADD COLUMN IF NOT EXISTS dask_policy_expiry DATE DEFAULT NULL",
         'has_home_policy' => "ALTER TABLE $table_name ADD COLUMN IF NOT EXISTS has_home_policy TINYINT(1) DEFAULT 0",
-        'home_policy_expiry' => "ALTER TABLE $table_name ADD COLUMN IF NOT EXISTS home_policy_expiry DATE DEFAULT NULL"
+        'home_policy_expiry' => "ALTER TABLE $table_name ADD COLUMN IF NOT EXISTS home_policy_expiry DATE DEFAULT NULL",
+        'has_offer' => "ALTER TABLE $table_name ADD COLUMN IF NOT EXISTS has_offer TINYINT(1) DEFAULT 0",
+        'offer_insurance_type' => "ALTER TABLE $table_name ADD COLUMN IF NOT EXISTS offer_insurance_type VARCHAR(100) DEFAULT NULL",
+        'offer_amount' => "ALTER TABLE $table_name ADD COLUMN IF NOT EXISTS offer_amount DECIMAL(10,2) DEFAULT NULL",
+        'offer_expiry_date' => "ALTER TABLE $table_name ADD COLUMN IF NOT EXISTS offer_expiry_date DATE DEFAULT NULL",
+        'offer_notes' => "ALTER TABLE $table_name ADD COLUMN IF NOT EXISTS offer_notes TEXT DEFAULT NULL"
     );
     
     foreach ($columns_to_add as $column => $query) {
