@@ -2750,7 +2750,10 @@ function insurance_crm_rep_panel_scripts() {
             <?php include_once(dirname(__FILE__) . '/reports.php'); ?>
         <?php elseif ($current_view == 'settings'): ?>
             <?php include_once(dirname(__FILE__) . '/settings.php'); ?>
-        <?php endif; ?>
+        	
+	<?php elseif ($current_view == 'notifications'): ?>
+	 <?php include_once(dirname(__FILE__) . '/notifications.php'); ?>
+	<?php endif; ?>
 
         <style>
             .insurance-crm-page * {
