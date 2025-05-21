@@ -1,7 +1,7 @@
 <?php
 /**
  * Frontend Poliçe Yönetim Sayfası
- * @version 2.2.9
+ * @version 3.1.0 - Tüm sorunlar çözüldü ve formlar varsayılan olarak gizli
  */
 
 include_once(dirname(__FILE__) . '/template-colors.php');
@@ -23,6 +23,36 @@ $users_table = $wpdb->users;
 $column_exists = $wpdb->get_row("SHOW COLUMNS FROM $policies_table LIKE 'insured_party'");
 if (!$column_exists) {
     $result = $wpdb->query("ALTER TABLE $policies_table ADD COLUMN insured_party VARCHAR(255) DEFAULT NULL AFTER status");
+    if ($result === false) {
+        echo '<div class="ab-notice ab-error">Veritabanı güncellenirken bir hata oluştu: ' . $wpdb->last_error . '</div>';
+        return;
+    }
+}
+
+// Müşteri tablosunda tc_identity sütunu kontrolü ve ekleme
+$column_exists = $wpdb->get_row("SHOW COLUMNS FROM $customers_table LIKE 'tc_identity'");
+if (!$column_exists) {
+    $result = $wpdb->query("ALTER TABLE $customers_table ADD COLUMN tc_identity VARCHAR(20) DEFAULT NULL AFTER last_name");
+    if ($result === false) {
+        echo '<div class="ab-notice ab-error">Veritabanı güncellenirken bir hata oluştu: ' . $wpdb->last_error . '</div>';
+        return;
+    }
+}
+
+// Müşteri tablosunda birth_date sütunu kontrolü ve ekleme
+$column_exists = $wpdb->get_row("SHOW COLUMNS FROM $customers_table LIKE 'birth_date'");
+if (!$column_exists) {
+    $result = $wpdb->query("ALTER TABLE $customers_table ADD COLUMN birth_date DATE DEFAULT NULL AFTER tc_identity");
+    if ($result === false) {
+        echo '<div class="ab-notice ab-error">Veritabanı güncellenirken bir hata oluştu: ' . $wpdb->last_error . '</div>';
+        return;
+    }
+}
+
+// Müşteri tablosunda representative_id sütunu kontrolü ve ekleme
+$column_exists = $wpdb->get_row("SHOW COLUMNS FROM $customers_table LIKE 'representative_id'");
+if (!$column_exists) {
+    $result = $wpdb->query("ALTER TABLE $customers_table ADD COLUMN representative_id INT DEFAULT NULL AFTER address");
     if ($result === false) {
         echo '<div class="ab-notice ab-error">Veritabanı güncellenirken bir hata oluştu: ' . $wpdb->last_error . '</div>';
         return;
@@ -55,6 +85,72 @@ if (isset($_SESSION['crm_notice'])) {
     unset($_SESSION['crm_notice']);
 }
 
+// XML veri işleme debug bilgilerini tutan array
+$debug_info = array(
+    'total_policies' => 0,
+    'processed_policies' => 0,
+    'matched_customers' => 0,
+    'failed_matches' => 0,
+    'last_error' => ''
+);
+
+/**
+ * Adresten kredi kartı ve benzeri bilgileri temizleyen fonksiyon
+ * ÖNEMLİ: BU FONKSİYON GÜNCELLENDİ - DAHA KAPSAMLI TEMİZLEME UYGULANIR
+ *
+ * @param string $address Temizlenecek adres
+ * @return string Temizlenmiş adres
+ */
+function clean_address($address) {
+    // Hiçbir adres yoksa boş döndür
+    if (empty($address)) {
+        return '';
+    }
+    
+    // Kredi kartı numarası ve diğer finansal bilgileri kaldır
+    // Daha kapsamlı regex desenleri eklendi
+    $patterns = [
+        // Kart numarası formatları
+        '/\b\d{4}[\s\-]?\d{4}[\s\-]?\d{4}[\s\-]?\d{4}\b/i',
+        '/\b\d{4}[\s\-]?\d{4}[\s\-]?[\*]{4}[\s\-]?\d{4}\b/i',
+        '/\b\d{6}[\*]{6}\d{4}\b/i',
+        
+        // Kart numaraları (başlangıç rakamına göre)
+        '/\b5\d{3}[\s\-]?\d{4}[\s\-]?\d{4}[\s\-]?\d{4}\b/i', // Mastercard
+        '/\b4\d{3}[\s\-]?\d{4}[\s\-]?\d{4}[\s\-]?\d{4}\b/i', // Visa
+        
+        // Etiketli kart bilgileri
+        '/Kart[ _]?No[:\s]*[\d\*\s\-]+/i',
+        '/Kart[ _]?Sahibi[:\s]*[^<>\/\n\r]+/i',
+        '/Kart[_\s]Tahsil[_\s]Tarihi[:\s]*[^<>\/\n\r]+/i',
+        
+        // Finansal bilgiler
+        '/BrutTutar[:\s]*[\-\d\.,]+/i',
+        '/Tahsilat[_\s]Doviz[:\s]*[A-Z]+/i',
+        '/Police[_\s]Doviz[:\s]*[A-Z]+/i',
+        '/Police[_\s]Tutar[:\s]*[\-\d\.,]+/i',
+        '/Tahsil[_\s]Tarihi[:\s]*[\d\.\-\/]+/i',
+        '/TahsilatTutari[:\s]*[\d\.\,]+/i',
+        
+        // XML formatından gelen kart bilgisi
+        '/\d{5}[\s\-]?\d{5}[\s\-]?\d{5}[\s\-]?\d{5}/i',
+        '/\b\d{5}\s+\d{5}\s+\d{5}\b/i',
+        
+        // XML'deki diğer finansal bilgiler
+        '/[\d\s]{15,30}/', // Uzun sayı dizileri (büyük olasılıkla kart numaraları)
+        '/[\d]{5,6}\s[\d]{5,6}\s[\d]{5,6}/', // Boşlukla ayrılmış sayı grupları
+    ];
+    
+    foreach ($patterns as $pattern) {
+        $address = preg_replace($pattern, '[KART BİLGİSİ ÇIKARILDI]', $address);
+    }
+    
+    // Ardışık 3 veya daha fazla boşlukları tek boşluğa indir ve trim
+    $address = preg_replace('/\s{3,}/', ' ', $address);
+    $address = preg_replace('/\s+/', ' ', $address);
+    return trim($address);
+}
+
 // XML Yükleme ve Ön İzleme
 $preview_data = null;
 if (isset($_POST['preview_xml']) && isset($_POST['xml_import_nonce']) && wp_verify_nonce($_POST['xml_import_nonce'], 'xml_import_action')) {
@@ -67,73 +163,269 @@ if (isset($_POST['preview_xml']) && isset($_POST['xml_import_nonce']) && wp_veri
             $notice = '<div class="ab-notice ab-error">Lütfen geçerli bir XML dosyası yükleyin.</div>';
         } else {
             $xml_content = file_get_contents($file_tmp);
+            // BOM karakterini temizleme (UTF-8 BOM sorunlarını önler)
+            $xml_content = preg_replace('/^\xEF\xBB\xBF/', '', $xml_content);
+            
+            // Hata işleme modunu etkinleştir
+            libxml_use_internal_errors(true);
             $xml = simplexml_load_string($xml_content);
+            $libxml_errors = libxml_get_errors();
+            libxml_clear_errors();
 
-            if ($xml === false) {
-                $notice = '<div class="ab-notice ab-error">XML dosyası ayrıştırılamadı.</div>';
+            if ($xml === false || !empty($libxml_errors)) {
+                $error_msg = "XML dosyası ayrıştırılamadı. ";
+                if (!empty($libxml_errors)) {
+                    $error_msg .= "Hata: " . $libxml_errors[0]->message;
+                }
+                $notice = '<div class="ab-notice ab-error">' . $error_msg . '</div>';
             } else {
                 $preview_data = array(
                     'policies' => array(),
                     'customers' => array(),
                 );
 
-                foreach ($xml->Policy as $policy_xml) {
-                    // Poliçe türü eşleştirme
-                    $policy_type_raw = (string)$policy_xml->PolicyType;
-                    $policy_type_map = array(
-                        'ZORUNLU MALİ SORUMLULUK' => 'Trafik',
-                        'TICARI GENİŞLETİLMİŞ KASKO' => 'Kasko',
-                    );
-                    $policy_type = isset($policy_type_map[$policy_type_raw]) ? $policy_type_map[$policy_type_raw] : 'Diğer';
-
-                    // Müşteri bilgilerini al
-                    $customer_name = (string)$policy_xml->CustomerName;
-                    $customer_parts = explode(' ', trim($customer_name));
-                    $first_name = !empty($customer_parts[0]) ? $customer_parts[0] : 'Bilinmeyen';
-                    $last_name = !empty($customer_parts[1]) ? implode(' ', array_slice($customer_parts, 1)) : 'Müşteri';
-                    $phone = (string)$policy_xml->CustomerPhone;
-                    $address = (string)$policy_xml->CustomerAddress;
-
-                    // Müşteriyi kontrol et
-                    $customer_id = $wpdb->get_var($wpdb->prepare(
-                        "SELECT id FROM $customers_table WHERE first_name = %s AND last_name = %s AND phone = %s",
-                        $first_name,
-                        $last_name,
-                        $phone
-                    ));
-
-                    $customer_status = $customer_id ? 'Mevcut' : 'Yeni';
-
-                    // Müşteri verisini ön izlemeye ekle
-                    $customer_key = md5($first_name . $last_name . $phone);
-                    if (!isset($preview_data['customers'][$customer_key])) {
-                        $preview_data['customers'][$customer_key] = array(
-                            'first_name' => $first_name,
-                            'last_name' => $last_name,
-                            'phone' => $phone,
-                            'address' => $address,
-                            'status' => $customer_status,
-                            'customer_id' => $customer_id,
-                        );
+                $processed_policies = 0;
+                
+                // Debug işlem başlangıç saati
+                $debug_info['process_start'] = date('Y-m-d H:i:s'); 
+                $debug_info['xml_structure'] = '';
+                
+                // XML yapısını belirle
+                if (isset($xml->ACENTEDATATRANSFERI) && isset($xml->ACENTEDATATRANSFERI->POLICE)) {
+                    // ACENTEDATATRANSFERI altındaki POLICE elementleri
+                    $debug_info['xml_structure'] = 'ACENTEDATATRANSFERI->POLICE';
+                    $policies = $xml->ACENTEDATATRANSFERI->POLICE;
+                    
+                    // SimpleXML'in foreach'inde sorunu önlemek için önce dizi olarak element sayısını belirle
+                    $policy_count = $policies->count();
+                    $debug_info['total_policies'] = $policy_count;
+                    
+                    // Her bir poliçeyi tek tek işle
+                    for ($i = 0; $i < $policy_count; $i++) {
+                        $policy_xml = $policies[$i];
+                        process_policy_xml($policy_xml, $preview_data, $current_user_rep_id, $wpdb, $customers_table, $debug_info);
+                        $processed_policies++;
                     }
-
-                    // Poliçe verilerini hazırla
-                    $preview_data['policies'][] = array(
-                        'policy_number' => (string)$policy_xml->PolicyNumber,
-                        'customer_key' => $customer_key,
-                        'policy_type' => $policy_type,
-                        'insurance_company' => 'SOMPO',
-                        'start_date' => date('Y-m-d', strtotime((string)$policy_xml->StartDate)),
-                        'end_date' => date('Y-m-d', strtotime((string)$policy_xml->EndDate)),
-                        'premium_amount' => floatval((string)$policy_xml->PremiumAmount),
-                        'insured_party' => (string)$policy_xml->PlateNumber,
-                    );
+                    
+                } elseif (isset($xml->POLICE)) {
+                    // Doğrudan POLICE elementleri
+                    $debug_info['xml_structure'] = 'direct POLICE';
+                    $policies = $xml->POLICE;
+                    
+                    // SimpleXML'in foreach'inde sorunu önlemek için önce dizi olarak element sayısını belirle
+                    $policy_count = $policies->count();
+                    $debug_info['total_policies'] = $policy_count;
+                    
+                    // Her bir poliçeyi tek tek işle
+                    for ($i = 0; $i < $policy_count; $i++) {
+                        $policy_xml = $policies[$i];
+                        process_policy_xml($policy_xml, $preview_data, $current_user_rep_id, $wpdb, $customers_table, $debug_info);
+                        $processed_policies++;
+                    }
+                    
+                } else {
+                    // Hiçbir bilinen yapı bulamazsak, farklı bir XML ağacı olabilir, tüm yapıyı tara
+                    $debug_info['xml_structure'] = 'unknown structure, scanning';
+                    $found_policies = false;
+                    
+                    // Bilinen tüm yapıları dene
+                    foreach ($xml->children() as $tag_name => $node) {
+                        if (strtoupper($tag_name) == 'POLICE' || $tag_name == 'POLICE') {
+                            // İlk seviyede POLICE elementi
+                            $debug_info['xml_structure'] = 'first level as ' . $tag_name;
+                            $policies = $xml->{$tag_name};
+                            $policy_count = $policies->count();
+                            $debug_info['total_policies'] = $policy_count;
+                            
+                            for ($i = 0; $i < $policy_count; $i++) {
+                                $policy_xml = $policies[$i];
+                                process_policy_xml($policy_xml, $preview_data, $current_user_rep_id, $wpdb, $customers_table, $debug_info);
+                                $processed_policies++;
+                            }
+                            
+                            $found_policies = true;
+                            break;
+                        }
+                        
+                        // İkinci seviyede POLICE elementi
+                        foreach ($node->children() as $child_name => $child) {
+                            if (strtoupper($child_name) == 'POLICE' || $child_name == 'POLICE') {
+                                $debug_info['xml_structure'] = $tag_name . '->' . $child_name;
+                                $policies = $xml->{$tag_name}->{$child_name};
+                                $policy_count = $policies->count();
+                                $debug_info['total_policies'] = $policy_count;
+                                
+                                for ($i = 0; $i < $policy_count; $i++) {
+                                    $policy_xml = $policies[$i];
+                                    process_policy_xml($policy_xml, $preview_data, $current_user_rep_id, $wpdb, $customers_table, $debug_info);
+                                    $processed_policies++;
+                                }
+                                
+                                $found_policies = true;
+                                break 2; // İç ve dış döngüden çık
+                            }
+                        }
+                    }
+                    
+                    if (!$found_policies) {
+                        $notice = '<div class="ab-notice ab-error">XML dosyası beklenen formatta değil. Poliçe bilgileri bulunamadı.</div>';
+                        $preview_data = null;
+                    }
+                }
+                
+                // Hiç poliçe işlenmemişse hata ver
+                if ($processed_policies === 0 && $preview_data !== null) {
+                    $notice = '<div class="ab-notice ab-error">XML dosyası okundu, ancak hiçbir poliçe bilgisi bulunamadı. Sebep: ' . $debug_info['last_error'] . '</div>';
+                    $preview_data = null;
+                } else {
+                    // İşlem başarılı - Debug bilgisini ekle
+                    $debug_info['processed_policies'] = $processed_policies;
+                    $preview_data['debug'] = $debug_info;
                 }
             }
         }
     } else {
         $notice = '<div class="ab-notice ab-error">Lütfen bir XML dosyası seçin.</div>';
     }
+}
+
+// XML'den poliçe işleme fonksiyonu - ÖNEMLİ: GÜNCELLEME YAPILDI
+function process_policy_xml($policy_xml, &$preview_data, $current_user_rep_id, $wpdb, $customers_table, &$debug_info) {
+    // Poliçe türü belirleme
+    $policy_type_raw = (string)$policy_xml->Urun_Adi;
+    $policy_type_map = array(
+        'ZORUNLU MALİ SORUMLULUK' => 'Trafik',
+        'TICARI GENİŞLETİLMİŞ KASKO' => 'Kasko',
+    );
+    $policy_type = isset($policy_type_map[$policy_type_raw]) ? $policy_type_map[$policy_type_raw] : 'Diğer';
+
+    // Müşteri bilgilerini al - Sigortali_AdiSoyadi veya Musteri_Adi kullan
+    $customer_name = (string)$policy_xml->Musteri_Adi;
+    if (empty($customer_name)) {
+        $customer_name = (string)$policy_xml->Sigortali_AdiSoyadi;
+    }
+
+    // Kullanılabilir müşteri adı yoksa, bu poliçeyi atlayalım
+    if (empty($customer_name)) {
+        $debug_info['failed_matches']++;
+        $debug_info['last_error'] = 'Müşteri adı bulunamadı';
+        return;
+    }
+
+    $customer_name = trim($customer_name);
+    $customer_parts = preg_split('/\s+/', $customer_name, 2);
+    $first_name = !empty($customer_parts[0]) ? $customer_parts[0] : 'Bilinmeyen';
+    $last_name = !empty($customer_parts[1]) ? $customer_parts[1] : '';
+    
+    // Telefon numarası
+    $phone = (string)$policy_xml->Sigortali_MobilePhone;
+    if (empty($phone)) {
+        $phone = (string)$policy_xml->Telefon;
+    }
+    
+    // Adres bilgisini temizle (kredi kartı ve diğer finansal bilgileri kaldır)
+    $address_raw = (string)$policy_xml->Musteri_Adresi;
+    $address = clean_address($address_raw);
+    
+    // TC Kimlik numarasını al
+    $tc_kimlik = (string)$policy_xml->TCKimlikNo;
+    if (empty($tc_kimlik)) {
+        $tc_kimlik = (string)$policy_xml->Musteri_TCKimlikNo;
+    }
+    if (empty($tc_kimlik)) {
+        $tc_kimlik = (string)$policy_xml->Sigortali_TCKimlikNo;
+    }
+    
+    // Doğum tarihi bilgisini al ve formatla (MySQL date format: YYYY-MM-DD)
+    $birth_date = null;
+    if (!empty($policy_xml->Musteri_Dogum_Tarihi)) {
+        $birth_date_raw = (string)$policy_xml->Musteri_Dogum_Tarihi;
+        $birth_date = date('Y-m-d', strtotime(str_replace('.', '-', $birth_date_raw)));
+    }
+
+    // ÖNEMLİ DÜZELTME: Müşteriyi TC kimlik numarasına göre kontrol et
+    // tc_identity sütununu kullanıyoruz, identification_number DEĞİL!
+    $customer_id = null;
+    if (!empty($tc_kimlik)) {
+        $customer_id = $wpdb->get_var($wpdb->prepare(
+            "SELECT id FROM $customers_table WHERE tc_identity = %s",
+            $tc_kimlik
+        ));
+    }
+
+    if (!$customer_id) {
+        // TC kimliğe göre bulunamadıysa, isim ve telefona göre kontrol et
+        $customer_id = $wpdb->get_var($wpdb->prepare(
+            "SELECT id FROM $customers_table WHERE first_name = %s AND last_name = %s AND phone = %s",
+            $first_name,
+            $last_name,
+            $phone
+        ));
+    }
+
+    $customer_status = $customer_id ? 'Mevcut' : 'Yeni';
+    if ($customer_id) {
+        $debug_info['matched_customers']++;
+    }
+
+    // Müşteri verisini ön izlemeye ekle
+    $customer_key = md5($tc_kimlik . $first_name . $last_name . $phone);
+    if (!isset($preview_data['customers'][$customer_key])) {
+        $preview_data['customers'][$customer_key] = array(
+            'first_name' => $first_name,
+            'last_name' => $last_name,
+            'phone' => $phone,
+            'address' => $address, 
+            'address_raw' => $address_raw,  // Debug için ham adresi de kaydediyoruz
+            'tc_kimlik' => $tc_kimlik,
+            'birth_date' => $birth_date,
+            'status' => $customer_status,
+            'customer_id' => $customer_id,
+            'representative_id' => $current_user_rep_id
+        );
+    }
+
+    // Poliçe verilerini hazırla
+    $policy_number = (string)$policy_xml->Police_NO;
+    $zeyl_no = (string)$policy_xml->Zeyl_NO;
+    if (!empty($zeyl_no) && $zeyl_no != '0') {
+        $policy_number .= '-' . $zeyl_no;
+    }
+
+    // Tarih formatlarını kontrol et ve düzelt
+    $start_date_raw = (string)$policy_xml->PoliceBaslangicTarihi;
+    $end_date_raw = (string)$policy_xml->PoliceBitisTarihi;
+    
+    // Tarih formatlarını düzenli hale getir (gün-ay-yıl formatından yıl-ay-gün'e)
+    $start_date = date('Y-m-d', strtotime(str_replace('.', '-', $start_date_raw)));
+    $end_date = date('Y-m-d', strtotime(str_replace('.', '-', $end_date_raw)));
+    
+    // Tüm poliçeleri aktif olarak işaretle
+    $status = 'aktif';
+
+    // Brut primi hesapla
+    $premium_amount = 0;
+    if (isset($policy_xml->BrutPrim)) {
+        $premium_amount = floatval((string)$policy_xml->BrutPrim);
+    }
+
+    // Poliçe verisini ön izlemeye ekle
+    $preview_data['policies'][] = array(
+        'policy_number' => $policy_number,
+        'customer_key' => $customer_key,
+        'policy_type' => $policy_type,
+        'insurance_company' => 'Sompo',
+        'start_date' => $start_date,
+        'end_date' => $end_date,
+        'premium_amount' => $premium_amount,
+        'insured_party' => '', // Sigorta ettiren boş bırakıldı
+        'status' => $status,
+        'xml_fields' => array(
+            'Urun_Adi' => (string)$policy_xml->Urun_Adi,
+            'Police_NO' => (string)$policy_xml->Police_NO,
+            'Zeyl_NO' => (string)$policy_xml->Zeyl_NO
+        )
+    );
 }
 
 // XML Onaylama ve Aktarma
@@ -146,32 +438,103 @@ if (isset($_POST['confirm_xml']) && isset($_POST['xml_confirm_nonce']) && wp_ver
     } else {
         $success_count = 0;
         $error_count = 0;
+        $customer_success = 0;
 
+        // Önce tüm müşterileri oluştur veya güncelle
+        $customer_ids = array();
+        foreach ($preview_data['customers'] as $customer_key => $customer) {
+            // Müşteriyi kontrol et veya oluştur
+            $existing_customer_id = $customer['customer_id'];
+            if (!$existing_customer_id) {
+                $customer_insert_data = array(
+                    'first_name' => $customer['first_name'],
+                    'last_name' => $customer['last_name'],
+                    'phone' => $customer['phone'],
+                    'address' => $customer['address'],
+                    'representative_id' => $current_user_rep_id,
+                    'created_at' => current_time('mysql'),
+                    'updated_at' => current_time('mysql'),
+                );
+                
+                // ÖNEMLİ DÜZELTME: TC kimlik numarasını tc_identity sütununa ekle
+                if (!empty($customer['tc_kimlik'])) {
+                    $customer_insert_data['tc_identity'] = $customer['tc_kimlik'];
+                }
+                
+                // Doğum tarihini ekle
+                if (!empty($customer['birth_date'])) {
+                    $customer_insert_data['birth_date'] = $customer['birth_date'];
+                }
+                
+                $result = $wpdb->insert($customers_table, $customer_insert_data);
+                if ($result !== false) {
+                    $customer_ids[$customer_key] = $wpdb->insert_id;
+                    $customer_success++;
+                } else {
+                    $customer_ids[$customer_key] = null;
+                    $error_count++;
+                }
+            } else {
+                // Mevcut müşteriyi güncelle
+                $customer_update_data = array(
+                    'first_name' => $customer['first_name'],
+                    'last_name' => $customer['last_name'],
+                    'phone' => $customer['phone'],
+                    'address' => $customer['address'],
+                    'updated_at' => current_time('mysql'),
+                );
+                
+                // ÖNEMLİ DÜZELTME: TC kimlik numarasını tc_identity sütununa ekle/güncelle
+                if (!empty($customer['tc_kimlik'])) {
+                    $customer_update_data['tc_identity'] = $customer['tc_kimlik'];
+                }
+                
+                // Doğum tarihini ekle/güncelle
+                if (!empty($customer['birth_date'])) {
+                    $customer_update_data['birth_date'] = $customer['birth_date'];
+                }
+                
+                // Müşteri temsilcisi atanmamışsa ata
+                $has_representative = $wpdb->get_var($wpdb->prepare(
+                    "SELECT representative_id FROM $customers_table WHERE id = %d",
+                    $existing_customer_id
+                ));
+                
+                if (empty($has_representative)) {
+                    $customer_update_data['representative_id'] = $current_user_rep_id;
+                }
+                
+                $wpdb->update(
+                    $customers_table,
+                    $customer_update_data,
+                    array('id' => $existing_customer_id)
+                );
+                $customer_ids[$customer_key] = $existing_customer_id;
+            }
+        }
+
+        // Şimdi poliçeleri oluştur
         foreach ($preview_data['policies'] as $index => $policy_data) {
-            if (!in_array($index, $selected_policies)) {
+            // ÖNEMLİ DÜZELTME: String karşılaştırması yerine integer karşılaştırması
+            $index_int = intval($index);
+            if (!in_array((string)$index, $selected_policies) && !in_array($index_int, $selected_policies)) {
                 continue; // Seçilmemiş poliçeleri atla
             }
 
-            // Müşteri bilgilerini al
+            // Müşteri ID'sini al
             $customer_key = $policy_data['customer_key'];
-            $customer = $preview_data['customers'][$customer_key];
-
-            // Müşteriyi kontrol et veya oluştur
-            $customer_id = $customer['customer_id'];
+            $customer_id = isset($customer_ids[$customer_key]) ? $customer_ids[$customer_key] : null;
+            
             if (!$customer_id) {
-                $wpdb->insert(
-                    $customers_table,
-                    array(
-                        'first_name' => $customer['first_name'],
-                        'last_name' => $customer['last_name'],
-                        'phone' => $customer['phone'],
-                        'address' => $customer['address'],
-                        'created_at' => current_time('mysql'),
-                        'updated_at' => current_time('mysql'),
-                    )
-                );
-                $customer_id = $wpdb->insert_id;
+                $error_count++;
+                continue; // Müşteri oluşturulamadıysa poliçeyi atla
             }
+
+            // Poliçeyi kontrol et (aynı poliçe numarası varsa güncelle)
+            $existing_policy = $wpdb->get_row($wpdb->prepare(
+                "SELECT id FROM $policies_table WHERE policy_number = %s",
+                $policy_data['policy_number']
+            ));
 
             // Poliçe verilerini hazırla
             $policy_insert_data = array(
@@ -184,13 +547,22 @@ if (isset($_POST['confirm_xml']) && isset($_POST['xml_confirm_nonce']) && wp_ver
                 'end_date' => $policy_data['end_date'],
                 'premium_amount' => $policy_data['premium_amount'],
                 'insured_party' => $policy_data['insured_party'],
-                'status' => 'aktif',
-                'created_at' => current_time('mysql'),
+                'status' => $policy_data['status'],
                 'updated_at' => current_time('mysql'),
             );
 
-            // Poliçeyi kaydet
-            $result = $wpdb->insert($policies_table, $policy_insert_data);
+            if ($existing_policy) {
+                // Poliçeyi güncelle
+                $result = $wpdb->update(
+                    $policies_table, 
+                    $policy_insert_data,
+                    array('id' => $existing_policy->id)
+                );
+            } else {
+                // Yeni poliçe ekle
+                $policy_insert_data['created_at'] = current_time('mysql');
+                $result = $wpdb->insert($policies_table, $policy_insert_data);
+            }
 
             if ($result !== false) {
                 $success_count++;
@@ -199,9 +571,9 @@ if (isset($_POST['confirm_xml']) && isset($_POST['xml_confirm_nonce']) && wp_ver
             }
         }
 
-        $notice = '<div class="ab-notice ab-success">' . $success_count . ' poliçe başarıyla aktarıldı.';
+        $notice = '<div class="ab-notice ab-success">' . $success_count . ' poliçe başarıyla aktarıldı. ' . $customer_success . ' yeni müşteri eklendi.';
         if ($error_count > 0) {
-            $notice .= ' ' . $error_count . ' poliçe aktarılırken hata oluştu.';
+            $notice .= ' ' . $error_count . ' işlemde hata oluştu.';
         }
         $notice .= '</div>';
 
@@ -277,10 +649,10 @@ $total_items = $wpdb->get_var("SELECT COUNT(DISTINCT p.id) " . $base_query);
 $orderby = isset($_GET['orderby']) ? sanitize_text_field($_GET['orderby']) : 'p.created_at';
 $order = isset($_GET['order']) && in_array(strtoupper($_GET['order']), array('ASC', 'DESC')) ? strtoupper($_GET['order']) : 'DESC';
 
-// Filtrelenmiş poliçe listesini al
+// Filtrelenmiş poliçe listesini al - tc_identity eklenmiş haliyle
 $policies = $wpdb->get_results("
     SELECT p.*, 
-           c.first_name, c.last_name,
+           c.first_name, c.last_name, c.tc_identity,
            u.display_name as representative_name 
     " . $base_query . " 
     ORDER BY $orderby $order 
@@ -289,13 +661,34 @@ $policies = $wpdb->get_results("
 
 // Diğer gerekli veriler
 $settings = get_option('insurance_crm_settings');
+// Eğer Sompo şirketlerde yoksa, ekle
 $insurance_companies = isset($settings['insurance_companies']) ? $settings['insurance_companies'] : array();
+if (!in_array('Sompo', $insurance_companies)) {
+    // Eğer SOMPO varsa kaldır, Sompo ekle
+    $key = array_search('SOMPO', $insurance_companies);
+    if ($key !== false) {
+        unset($insurance_companies[$key]);
+    }
+    $insurance_companies[] = 'Sompo';
+    $settings['insurance_companies'] = array_values($insurance_companies);
+    update_option('insurance_crm_settings', $settings);
+}
+
 $policy_types = isset($settings['default_policy_types']) ? $settings['default_policy_types'] : array('Kasko', 'Trafik', 'Konut', 'DASK', 'Sağlık', 'Hayat', 'Seyahat', 'Diğer');
 $customers = $wpdb->get_results("SELECT id, first_name, last_name FROM $customers_table ORDER BY first_name, last_name");
 $total_pages = ceil($total_items / $per_page);
 
 $current_action = isset($_GET['action']) ? $_GET['action'] : '';
 $show_list = ($current_action !== 'view' && $current_action !== 'edit' && $current_action !== 'new' && $current_action !== 'renew' && $current_action !== 'cancel');
+
+// Güncel tarih bilgisi
+$current_date = date('Y-m-d H:i:s');
+
+// Aktif filtre sayısını hesapla
+$active_filter_count = 0;
+foreach ($filters as $key => $value) {
+    if (!empty($value)) $active_filter_count++;
+}
 ?>
 
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css">
@@ -308,6 +701,17 @@ $show_list = ($current_action !== 'view' && $current_action !== 'edit' && $curre
     <div class="ab-crm-preview">
         <h2>XML Ön İzleme</h2>
         <p>Yüklenen XML dosyasındaki veriler aşağıda listelenmiştir. Aktarmak istediğiniz poliçeleri seçin ve onaylayın.</p>
+
+        <!-- Debug Bilgileri -->
+        <?php if (isset($preview_data['debug'])): ?>
+        <div class="ab-debug-info">
+            <p><strong>İşlem Bilgileri:</strong> XML'de <?php echo $preview_data['debug']['total_policies']; ?> poliçe bulundu, 
+               <?php echo $preview_data['debug']['processed_policies']; ?> poliçe işlendi, 
+               <?php echo $preview_data['debug']['matched_customers']; ?> mevcut müşteri eşleştirildi. 
+               XML yapısı: <?php echo $preview_data['debug']['xml_structure']; ?>
+            </p>
+        </div>
+        <?php endif; ?>
 
         <!-- Yeni Poliçeler -->
         <h3>Yeni Poliçeler (<?php echo count($preview_data['policies']); ?>)</h3>
@@ -326,7 +730,7 @@ $show_list = ($current_action !== 'view' && $current_action !== 'edit' && $curre
                             <th>Başlangıç</th>
                             <th>Bitiş</th>
                             <th>Prim (₺)</th>
-                            <th>Sigorta Ettiren</th>
+                            <th>Durum</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -348,7 +752,9 @@ $show_list = ($current_action !== 'view' && $current_action !== 'edit' && $curre
                                 <td><?php echo date('d.m.Y', strtotime($policy['start_date'])); ?></td>
                                 <td><?php echo date('d.m.Y', strtotime($policy['end_date'])); ?></td>
                                 <td><?php echo number_format($policy['premium_amount'], 2, ',', '.'); ?></td>
-                                <td><?php echo esc_html($policy['insured_party'] ?: '-'); ?></td>
+                                <td>
+                                    <span class="ab-badge ab-badge-status-aktif">Aktif</span>
+                                </td>
                             </tr>
                         <?php endforeach; ?>
                     </tbody>
@@ -363,26 +769,53 @@ $show_list = ($current_action !== 'view' && $current_action !== 'edit' && $curre
                         <tr>
                             <th>Ad</th>
                             <th>Soyad</th>
+                            <th>TC Kimlik No</th>
+                            <th>Doğum Tarihi</th>
                             <th>Telefon</th>
                             <th>Adres</th>
+                            <th>Müşteri Temsilcisi</th>
                             <th>Durum</th>
                         </tr>
                     </thead>
                     <tbody>
-                        <?php foreach ($preview_data['customers'] as $customer): ?>
-                            <?php if ($customer['status'] === 'Yeni'): ?>
+                        <?php 
+                        // Müşteri temsilcisi adını al
+                        $rep_name = '';
+                        if ($current_user_rep_id) {
+                            $rep_user_id = $wpdb->get_var($wpdb->prepare(
+                                "SELECT user_id FROM $representatives_table WHERE id = %d",
+                                $current_user_rep_id
+                            ));
+                            
+                            if ($rep_user_id) {
+                                $rep_name = $wpdb->get_var($wpdb->prepare(
+                                    "SELECT display_name FROM $users_table WHERE ID = %d",
+                                    $rep_user_id
+                                ));
+                            }
+                        }
+                        
+                        foreach ($preview_data['customers'] as $customer): 
+                            if ($customer['status'] === 'Yeni'): 
+                        ?>
                                 <tr>
                                     <td><?php echo esc_html($customer['first_name']); ?></td>
                                     <td><?php echo esc_html($customer['last_name']); ?></td>
+                                    <td><?php echo esc_html($customer['tc_kimlik']); ?></td>
+                                    <td><?php echo !empty($customer['birth_date']) ? date('d.m.Y', strtotime($customer['birth_date'])) : '-'; ?></td>
                                     <td><?php echo esc_html($customer['phone']); ?></td>
                                     <td><?php echo esc_html($customer['address']); ?></td>
+                                    <td><?php echo esc_html($rep_name); ?></td>
                                     <td><span class="ab-badge ab-badge-warning">Yeni</span></td>
                                 </tr>
-                            <?php endif; ?>
-                        <?php endforeach; ?>
-                        <?php if (empty(array_filter($preview_data['customers'], function($c) { return $c['status'] === 'Yeni'; }))): ?>
+                        <?php 
+                            endif; 
+                        endforeach; 
+                        
+                        if (empty(array_filter($preview_data['customers'], function($c) { return $c['status'] === 'Yeni'; }))): 
+                        ?>
                             <tr>
-                                <td colspan="5">Yeni müşteri bulunamadı.</td>
+                                <td colspan="8">Yeni müşteri bulunamadı.</td>
                             </tr>
                         <?php endif; ?>
                     </tbody>
@@ -411,7 +844,7 @@ $show_list = ($current_action !== 'view' && $current_action !== 'edit' && $curre
         </div>
     </div>
     
-    <!-- XML Yükleme Formu -->
+    <!-- XML Yükleme Formu - Varsayılan olarak gizli -->
     <div id="xml-import-container" class="ab-crm-filters ab-filters-hidden">
         <form method="post" enctype="multipart/form-data" id="xml-import-form" class="ab-filter-form">
             <?php wp_nonce_field('xml_import_action', 'xml_import_nonce'); ?>
@@ -434,13 +867,7 @@ $show_list = ($current_action !== 'view' && $current_action !== 'edit' && $curre
             <i class="fas fa-filter"></i> Filtreleme Seçenekleri <i class="fas fa-chevron-down"></i>
         </button>
         
-        <?php
-        $active_filter_count = 0;
-        foreach ($filters as $key => $value) {
-            if (!empty($value)) $active_filter_count++;
-        }
-        if ($active_filter_count > 0):
-        ?>
+        <?php if ($active_filter_count > 0): ?>
         <div class="ab-active-filters">
             <span><?php echo $active_filter_count; ?> aktif filtre</span>
             <a href="?view=policies" class="ab-clear-filters"><i class="fas fa-times"></i> Temizle</a>
@@ -448,7 +875,8 @@ $show_list = ($current_action !== 'view' && $current_action !== 'edit' && $curre
         <?php endif; ?>
     </div>
     
-    <div id="policies-filters-container" class="ab-crm-filters <?php echo $active_filter_count > 0 ? '' : 'ab-filters-hidden'; ?>">
+    <!-- Filtreleme formu - Varsayılan olarak gizli -->
+    <div id="policies-filters-container" class="ab-crm-filters ab-filters-hidden">
         <form method="get" id="policies-filter" class="ab-filter-form">
             <input type="hidden" name="view" value="policies">
             <?php wp_nonce_field('policies_filter_nonce', 'policies_filter_nonce'); ?>
@@ -590,6 +1018,9 @@ $show_list = ($current_action !== 'view' && $current_action !== 'edit' && $curre
                         <td>
                             <a href="?view=customers&action=view&id=<?php echo $policy->customer_id; ?>" class="ab-customer-link">
                                 <?php echo esc_html($policy->first_name . ' ' . $policy->last_name); ?>
+                                <?php if (!empty($policy->tc_identity)): ?>
+                                    <small>(<?php echo esc_html($policy->tc_identity); ?>)</small>
+                                <?php endif; ?>
                             </a>
                         </td>
                         <td><?php echo esc_html($policy->policy_type); ?></td>
@@ -610,7 +1041,7 @@ $show_list = ($current_action !== 'view' && $current_action !== 'edit' && $curre
                                     <i class="fas fa-file-pdf"></i> Görüntüle
                                 </a>
                             <?php else: ?>
-                                <span class="ab-no-document">Döküman yok</span>
+                                                <span class="ab-no-document">Döküman yok</span>
                             <?php endif; ?>
                         </td>
                         <td><?php echo !empty($policy->insured_party) ? esc_html($policy->insured_party) : '-'; ?></td>
@@ -681,6 +1112,17 @@ if (isset($_GET['action'])) {
 ?>
 
 <style>
+/* Debug Bilgileri Kutusu */
+.ab-debug-info {
+    background-color: #f0f8ff;
+    border: 1px solid #c6e2ff;
+    border-radius: 4px;
+    padding: 10px;
+    margin-bottom: 20px;
+    font-size: 13px;
+    color: #0066cc;
+}
+
 .ab-crm-container {
     max-width: 96%;
     width: 100%;
@@ -1059,6 +1501,13 @@ tr.cancelled td:first-child {
     color: #135e96;
 }
 
+.ab-customer-link small {
+    display: block;
+    color: #666;
+    font-size: 11px;
+    margin-top: 2px;
+}
+
 .ab-actions-column {
     text-align: center;
     width: 100px;
@@ -1249,7 +1698,7 @@ tr.cancelled td:first-child {
 }
 
 .ab-filters-hidden {
-    display: none;
+    display: none !important;
 }
 
 .ab-active-filters {
@@ -1409,9 +1858,31 @@ tr.cancelled td:first-child {
 
 <script>
 document.addEventListener('DOMContentLoaded', function() {
+    // Formların başlangıç durumunu garantile
+    const filtersContainer = document.getElementById('policies-filters-container');
+    const xmlImportContainer = document.getElementById('xml-import-container');
+    
+    if (filtersContainer) {
+        filtersContainer.classList.add('ab-filters-hidden');
+    }
+    
+    if (xmlImportContainer) {
+        xmlImportContainer.classList.add('ab-filters-hidden');
+    }
+    
+    // Aktif filtre varsa filtreleme formunu göster
+    <?php if ($active_filter_count > 0): ?>
+    if (filtersContainer) {
+        filtersContainer.classList.remove('ab-filters-hidden');
+        const toggleFiltersBtn = document.getElementById('toggle-filters-btn');
+        if (toggleFiltersBtn) {
+            toggleFiltersBtn.classList.add('active');
+        }
+    }
+    <?php endif; ?>
+    
     // Filtreleme toggle kontrolü
     const toggleFiltersBtn = document.getElementById('toggle-filters-btn');
-    const filtersContainer = document.getElementById('policies-filters-container');
     
     if (toggleFiltersBtn && filtersContainer) {
         toggleFiltersBtn.addEventListener('click', function() {
@@ -1422,7 +1893,6 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // XML Yükleme toggle kontrolü
     const importXmlBtn = document.getElementById('import-xml-btn');
-    const xmlImportContainer = document.getElementById('xml-import-container');
     const cancelImportBtn = document.getElementById('cancel-import-btn');
     
     if (importXmlBtn && xmlImportContainer) {
@@ -1476,17 +1946,21 @@ document.addEventListener('DOMContentLoaded', function() {
         const policyCheckboxes = document.querySelectorAll('input[name="selected_policies[]"]');
 
         // Tümünü seç/terk et kontrolü
-        selectAllCheckbox.addEventListener('change', function() {
-            policyCheckboxes.forEach(checkbox => {
-                checkbox.checked = this.checked;
+        if (selectAllCheckbox) {
+            selectAllCheckbox.addEventListener('change', function() {
+                policyCheckboxes.forEach(checkbox => {
+                    checkbox.checked = this.checked;
+                });
             });
-        });
+        }
 
         // Bireysel checkbox değiştiğinde tümünü seç durumunu güncelle
         policyCheckboxes.forEach(checkbox => {
             checkbox.addEventListener('change', function() {
                 const allChecked = Array.from(policyCheckboxes).every(cb => cb.checked);
-                selectAllCheckbox.checked = allChecked;
+                if (selectAllCheckbox) {
+                    selectAllCheckbox.checked = allChecked;
+                }
             });
         });
 
