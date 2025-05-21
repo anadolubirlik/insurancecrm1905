@@ -101,12 +101,11 @@ function get_team_members($user_id) {
 }
 
 /**
- * Kullanıcının rolüne göre yetkisi olan temsilci ID'lerini döndüren fonksiyon
+ * Dashboard görünümü ve alt menüler için temsilci ID'lerini döndüren fonksiyon
+ * Görünüm parametresine göre farklı davranış gösterir
  */
-function get_authorized_representatives($user_id) {
+function get_dashboard_representatives($user_id, $current_view = 'dashboard') {
     global $wpdb;
-    $settings = get_option('insurance_crm_settings', []);
-    $teams = isset($settings['teams_settings']['teams']) ? $settings['teams_settings']['teams'] : array();
     
     // Temsilci ID'sini al
     $rep = $wpdb->get_row($wpdb->prepare(
@@ -116,33 +115,259 @@ function get_authorized_representatives($user_id) {
     
     if (!$rep) return [];
     
-    // Patron ise tüm temsilcileri görebilir
+    $rep_id = $rep->id;
+    
+    // Patron için:
     if (is_patron($user_id)) {
+        // Dashboard ve ana menülerde (iletişimden anladığım bu) tüm verileri görsün
+        if ($current_view == 'dashboard' || 
+            $current_view == 'customers' || 
+            $current_view == 'policies' ||
+            $current_view == 'tasks' ||
+            $current_view == 'reports') {
+            return $wpdb->get_col("SELECT id FROM {$wpdb->prefix}insurance_crm_representatives WHERE status = 'active'");
+        } 
+        // Alt menülerde belirli bir ekip gösteriliyorsa sadece o ekibi göster
+        else if (strpos($current_view, 'team_') === 0 && isset($_GET['team_id'])) {
+            $selected_team_id = sanitize_text_field($_GET['team_id']);
+            $settings = get_option('insurance_crm_settings', []);
+            $teams = $settings['teams_settings']['teams'] ?? [];
+            if (isset($teams[$selected_team_id])) {
+                $team_members = array_merge([$teams[$selected_team_id]['leader_id']], $teams[$selected_team_id]['members']);
+                return $team_members;
+            }
+        }
+        // Diğer tüm görünümlerde tüm temsilcileri göster
         return $wpdb->get_col("SELECT id FROM {$wpdb->prefix}insurance_crm_representatives WHERE status = 'active'");
     }
     
-    // Müdür ise tüm ekipleri görebilir
+    // Müdür için:
     if (is_manager($user_id)) {
-        $all_team_members = [];
-        foreach ($teams as $team) {
-            $all_team_members[] = $team['leader_id']; // Ekip liderini ekle
-            $all_team_members = array_merge($all_team_members, $team['members']); // Ekip üyelerini ekle
+        // Ana dashboard'da kendi verilerini görsün
+        if ($current_view == 'dashboard') {
+            return [$rep_id];
         }
-        return array_unique($all_team_members);
+        // Müdüre özel alt menülerde (müdür paneli, tüm ekipler vs) tüm verileri görsün
+        else if ($current_view == 'manager_dashboard' || 
+                $current_view == 'all_teams' || 
+                $current_view == 'team_leaders' ||
+                strpos($current_view, 'manager_') === 0) {
+            
+            return $wpdb->get_col("SELECT id FROM {$wpdb->prefix}insurance_crm_representatives WHERE status = 'active'");
+        }
+        // Ana menülerde de tüm verileri görsün (istenildiği gibi)
+        else if ($current_view == 'customers' || 
+                $current_view == 'policies' ||
+                $current_view == 'tasks' ||
+                $current_view == 'reports') {
+            
+            return $wpdb->get_col("SELECT id FROM {$wpdb->prefix}insurance_crm_representatives WHERE status = 'active'");
+        }
+        // Belirli ekip görünümü seçilmişse o ekibin verilerini göster
+        else if (strpos($current_view, 'team_') === 0 && isset($_GET['team_id'])) {
+            $selected_team_id = sanitize_text_field($_GET['team_id']);
+            $settings = get_option('insurance_crm_settings', []);
+            $teams = $settings['teams_settings']['teams'] ?? [];
+            if (isset($teams[$selected_team_id])) {
+                $team_members = array_merge([$teams[$selected_team_id]['leader_id']], $teams[$selected_team_id]['members']);
+                return $team_members;
+            }
+        }
+        // Diğer tüm durumlarda sadece kendi verilerini göster
+        return [$rep_id];
     }
     
-    // Ekip lideri ise kendi ekip üyelerini görebilir
+    // Ekip lideri için
+    if (is_team_leader($user_id)) {
+        // Dashboard ve ana menülerde sadece kendi verilerini görür
+        if ($current_view == 'dashboard') {
+            return [$rep_id];
+        }
+        // Ekip lideri menülerinde ekibinin tüm verilerini görür
+        else if ($current_view == 'team' || 
+                strpos($current_view, 'team_') === 0) {
+            
+            $team_members = get_team_members($user_id);
+            return !empty($team_members) ? $team_members : [$rep_id];
+        }
+        // Ana menülerde (customers, policies, tasks) tüm ekip üyelerinin verilerini görsün (istenildiği gibi)
+        else if ($current_view == 'customers' || 
+                $current_view == 'policies' ||
+                $current_view == 'tasks' ||
+                $current_view == 'reports') {
+                
+            $team_members = get_team_members($user_id);
+            return !empty($team_members) ? $team_members : [$rep_id];
+        }
+        // Diğer tüm durumlarda sadece kendi verilerini göster
+        return [$rep_id];
+    }
+    
+    // Normal müşteri temsilcisi sadece kendi verilerini görür
+    return [$rep_id];
+}
+
+/**
+ * Kullanıcının silme yetkisi olup olmadığını kontrol eder
+ */
+function can_delete_items($user_id) {
+    return is_patron($user_id) || is_manager($user_id);
+}
+
+/**
+ * Kullanıcının pasife çekme yetkisi olup olmadığını kontrol eder
+ * Patron ve müdür hem silme hem pasife çekme yetkisine, 
+ * Ekip lideri ve temsilciler sadece pasife çekme yetkisine sahiptir
+ */
+function can_deactivate_items($user_id) {
+    return true; // Tüm kullanıcılar pasife çekebilir
+}
+
+/**
+ * Silme işlemini loglar
+ */
+function log_delete_action($user_id, $item_id, $item_type) {
+    global $wpdb;
+    
+    // Kullanıcı bilgilerini al
+    $user = get_userdata($user_id);
+    $user_name = $user ? $user->display_name : 'Bilinmeyen Kullanıcı';
+    
+    // Item türüne göre detayları al
+    $item_details = '';
+    if ($item_type == 'customer') {
+        $customer = $wpdb->get_row($wpdb->prepare(
+            "SELECT first_name, last_name FROM {$wpdb->prefix}insurance_crm_customers WHERE id = %d",
+            $item_id
+        ));
+        if ($customer) {
+            $item_details = $customer->first_name . ' ' . $customer->last_name;
+        }
+    } elseif ($item_type == 'policy') {
+        $policy = $wpdb->get_row($wpdb->prepare(
+            "SELECT policy_number FROM {$wpdb->prefix}insurance_crm_policies WHERE id = %d",
+            $item_id
+        ));
+        if ($policy) {
+            $item_details = $policy->policy_number;
+        }
+    }
+    
+    // Log mesajını hazırla
+    $log_message = sprintf(
+        'Kullanıcı %s (#%d) tarafından %s ID: %d, Detay: %s silindi.',
+        $user_name,
+        $user_id,
+        $item_type == 'customer' ? 'müşteri' : 'poliçe',
+        $item_id,
+        $item_details
+    );
+    
+    // Log tablosuna kaydet
+    $wpdb->insert(
+        $wpdb->prefix . 'insurance_crm_activity_logs',
+        [
+            'user_id' => $user_id,
+            'action_type' => 'delete',
+            'item_type' => $item_type,
+            'item_id' => $item_id,
+            'details' => $log_message,
+            'created_at' => current_time('mysql')
+        ]
+    );
+    
+    // WordPress log dosyasına da yazdır
+    error_log($log_message);
+    
+    return true;
+}
+
+/**
+ * Müşteri veya poliçe için silme butonu oluşturur 
+ */
+function get_delete_button($item_id, $item_type, $user_id) {
+    if (can_delete_items($user_id)) {
+        $confirm_message = $item_type == 'customers' ? 'Bu müşteriyi silmek istediğinizden emin misiniz?' : 'Bu poliçeyi silmek istediğinizden emin misiniz?';
+        
+        return '<a href="' . generate_panel_url($item_type, 'delete', $item_id) . '" class="table-action" title="Sil" onclick="return confirm(\'' . $confirm_message . '\');">
+                <i class="dashicons dashicons-trash"></i>
+            </a>';
+    }
+    return '';
+}
+
+/**
+ * Müşteri veya poliçe için pasife çekme butonu oluşturur 
+ */
+function get_deactivate_button($item_id, $item_type, $user_id, $current_status = 'active') {
+    if (can_deactivate_items($user_id)) {
+        $action = $current_status == 'active' ? 'deactivate' : 'activate';
+        $icon = $current_status == 'active' ? 'dashicons-hidden' : 'dashicons-visibility';
+        $title = $current_status == 'active' ? 'Pasife Al' : 'Aktif Et';
+        $confirm_message = $current_status == 'active' ? 
+            ($item_type == 'customers' ? 'Bu müşteriyi pasife almak istediğinizden emin misiniz?' : 'Bu poliçeyi pasife almak istediğinizden emin misiniz?') :
+            ($item_type == 'customers' ? 'Bu müşteriyi aktif etmek istediğinizden emin misiniz?' : 'Bu poliçeyi aktif etmek istediğinizden emin misiniz?');
+        
+        return '<a href="' . generate_panel_url($item_type, $action, $item_id) . '" class="table-action" title="' . $title . '" onclick="return confirm(\'' . $confirm_message . '\');">
+                <i class="dashicons ' . $icon . '"></i>
+            </a>';
+    }
+    return '';
+}
+
+/**
+ * Görev ataması için yetkili temsilcileri döndürür
+ */
+function get_assignable_representatives($user_id) {
+    global $wpdb;
+    $settings = get_option('insurance_crm_settings', []);
+    $teams = isset($settings['teams_settings']['teams']) ? $settings['teams_settings']['teams'] : [];
+    
+    // Temsilci ID'sini al
+    $rep = $wpdb->get_row($wpdb->prepare(
+        "SELECT id FROM {$wpdb->prefix}insurance_crm_representatives WHERE user_id = %d",
+        $user_id
+    ));
+    
+    if (!$rep) return [];
+    
+    // Patron ve Müdür tüm temsilcilere görev atayabilir
+    if (is_patron($user_id) || is_manager($user_id)) {
+        return $wpdb->get_results("SELECT r.id, r.title, u.display_name 
+                                  FROM {$wpdb->prefix}insurance_crm_representatives r
+                                  JOIN {$wpdb->users} u ON r.user_id = u.ID
+                                  WHERE r.status = 'active'
+                                  ORDER BY u.display_name ASC");
+    }
+    
+    // Ekip lideri sadece ekip üyelerine görev atayabilir
     if (is_team_leader($user_id)) {
         foreach ($teams as $team) {
             if ($team['leader_id'] == $rep->id) {
-                // Lider kendisi + ekip üyeleri
-                return array_unique(array_merge([$rep->id], $team['members']));
+                $members_ids = array_map('intval', $team['members']);
+                if (!empty($members_ids)) {
+                    $placeholders = implode(',', array_fill(0, count($members_ids), '%d'));
+                    return $wpdb->get_results($wpdb->prepare(
+                        "SELECT r.id, r.title, u.display_name 
+                        FROM {$wpdb->prefix}insurance_crm_representatives r
+                        JOIN {$wpdb->users} u ON r.user_id = u.ID
+                        WHERE r.id IN ($placeholders) AND r.status = 'active'
+                        ORDER BY u.display_name ASC",
+                        ...$members_ids
+                    ));
+                }
             }
         }
     }
     
-    // Normal temsilci ise sadece kendisini görebilir
-    return [$rep->id];
+    // Normal temsilci sadece kendisine görev atayabilir
+    return $wpdb->get_results($wpdb->prepare(
+        "SELECT r.id, r.title, u.display_name 
+        FROM {$wpdb->prefix}insurance_crm_representatives r
+        JOIN {$wpdb->users} u ON r.user_id = u.ID
+        WHERE r.id = %d AND r.status = 'active'",
+        $rep->id
+    ));
 }
 
 /**
@@ -155,46 +380,93 @@ function get_user_role_in_hierarchy($user_id) {
     return 'representative';
 }
 
+/**
+ * Hedef performans bilgilerini getirir
+ */
+function get_representative_targets($rep_ids) {
+    global $wpdb;
+    if (empty($rep_ids)) return [];
+    
+    $placeholders = implode(',', array_fill(0, count($rep_ids), '%d'));
+    $targets = $wpdb->get_results($wpdb->prepare(
+        "SELECT r.id, r.monthly_target, r.target_policy_count, u.display_name, r.title
+         FROM {$wpdb->prefix}insurance_crm_representatives r
+         JOIN {$wpdb->users} u ON r.user_id = u.ID
+         WHERE r.id IN ($placeholders)",
+        ...$rep_ids
+    ), ARRAY_A);
+    
+    return $targets;
+}
+
+/**
+ * Temsilcinin bu ayki performans verilerini getirir
+ */
+function get_representative_performance($rep_id) {
+    global $wpdb;
+    
+    $this_month_start = date('Y-m-01 00:00:00');
+    $this_month_end = date('Y-m-t 23:59:59');
+    
+    $total_premium = $wpdb->get_var($wpdb->prepare(
+        "SELECT COALESCE(SUM(premium_amount), 0) - COALESCE(SUM(refunded_amount), 0)
+         FROM {$wpdb->prefix}insurance_crm_policies 
+         WHERE representative_id = %d",
+        $rep_id
+    )) ?: 0;
+    
+    $current_month_premium = $wpdb->get_var($wpdb->prepare(
+        "SELECT COALESCE(SUM(premium_amount), 0) - COALESCE(SUM(refunded_amount), 0)
+         FROM {$wpdb->prefix}insurance_crm_policies
+         WHERE representative_id = %d 
+         AND start_date BETWEEN %s AND %s",
+        $rep_id, $this_month_start, $this_month_end
+    )) ?: 0;
+    
+    $total_policy_count = $wpdb->get_var($wpdb->prepare(
+        "SELECT COUNT(*) FROM {$wpdb->prefix}insurance_crm_policies 
+         WHERE representative_id = %d AND cancellation_date IS NULL",
+        $rep_id
+    )) ?: 0;
+    
+    $current_month_policy_count = $wpdb->get_var($wpdb->prepare(
+        "SELECT COUNT(*) FROM {$wpdb->prefix}insurance_crm_policies 
+         WHERE representative_id = %d 
+         AND start_date BETWEEN %s AND %s
+         AND cancellation_date IS NULL",
+        $rep_id, $this_month_start, $this_month_end
+    )) ?: 0;
+    
+    return [
+        'total_premium' => $total_premium,
+        'current_month_premium' => $current_month_premium,
+        'total_policy_count' => $total_policy_count,
+        'current_month_policy_count' => $current_month_policy_count
+    ];
+}
+
 // Kullanıcının rolünü belirle
 $user_role = get_user_role_in_hierarchy($current_user->ID);
-$authorized_rep_ids = get_authorized_representatives($current_user->ID);
 
-// Ekip verileri için temsilci ID'leri
-if ($user_role == 'patron' || $user_role == 'manager') {
-    // Patron ve müdür için tüm yetkilendirilen temsilciler
-    $rep_ids = $authorized_rep_ids;
-    // Ekip görünümü sayfalarında özel filtre
-    if (strpos($current_view, 'team_') === 0 && isset($_GET['team_id'])) {
-        $selected_team_id = sanitize_text_field($_GET['team_id']);
-        $settings = get_option('insurance_crm_settings', []);
-        $teams = $settings['teams_settings']['teams'] ?? [];
-        if (isset($teams[$selected_team_id])) {
-            $team_members = array_merge([$teams[$selected_team_id]['leader_id']], $teams[$selected_team_id]['members']);
-            $rep_ids = array_intersect($rep_ids, $team_members);
-        }
-    }
-} else if ($user_role == 'team_leader') {
-    // Mevcut ekip görünümü korunur
-    $team_members = ($current_view === 'team' || strpos($current_view, 'team_') === 0) ? get_team_members($current_user->ID) : [$representative->id];
-    $rep_ids = !empty($team_members) ? $team_members : [$representative->id];
-} else {
-    // Normal temsilci sadece kendisini görür
-    $rep_ids = [$representative->id];
-}
+// Dashboard görünümü ve menülere göre yetkili temsilci ID'lerini al
+$rep_ids = get_dashboard_representatives($current_user->ID, $current_view);
 
 // Ekip hedefi hesaplama
 $team_target = 0;
+$team_policy_target = 0;
 if ($current_view === 'team' || strpos($current_view, 'team_') === 0 || $user_role == 'patron' || $user_role == 'manager') {
     $targets = $wpdb->get_results($wpdb->prepare(
-        "SELECT monthly_target FROM {$wpdb->prefix}insurance_crm_representatives 
+        "SELECT monthly_target, target_policy_count FROM {$wpdb->prefix}insurance_crm_representatives 
          WHERE id IN (" . implode(',', array_fill(0, count($rep_ids), '%d')) . ")",
         ...$rep_ids
     ));
     foreach ($targets as $target) {
         $team_target += floatval($target->monthly_target);
+        $team_policy_target += intval($target->target_policy_count);
     }
 } else {
     $team_target = $representative->monthly_target;
+    $team_policy_target = $representative->target_policy_count;
 }
 
 // Üye performans verileri
@@ -202,7 +474,7 @@ $member_performance = [];
 if ($current_view === 'team' || $user_role == 'patron' || $user_role == 'manager') {
     foreach ($rep_ids as $rep_id) {
         $member_data = $wpdb->get_row($wpdb->prepare(
-            "SELECT r.id, u.display_name, r.title 
+            "SELECT r.id, u.display_name, r.title, r.monthly_target, r.target_policy_count 
              FROM {$wpdb->prefix}insurance_crm_representatives r 
              JOIN {$wpdb->users} u ON r.user_id = u.ID 
              WHERE r.id = %d",
@@ -225,13 +497,44 @@ if ($current_view === 'team' || $user_role == 'patron' || $user_role == 'manager
                  WHERE representative_id = %d",
                 $rep_id
             ));
+            
+            // Bu ay eklenen poliçe ve prim
+            $this_month_start = date('Y-m-01 00:00:00');
+            $this_month_end = date('Y-m-t 23:59:59');
+            
+            $this_month_policies = $wpdb->get_var($wpdb->prepare(
+                "SELECT COUNT(*) FROM {$wpdb->prefix}insurance_crm_policies 
+                 WHERE representative_id = %d 
+                 AND start_date BETWEEN %s AND %s
+                 AND cancellation_date IS NULL",
+                $rep_id, $this_month_start, $this_month_end
+            ));
+            
+            $this_month_premium = $wpdb->get_var($wpdb->prepare(
+                "SELECT COALESCE(SUM(premium_amount), 0) - COALESCE(SUM(refunded_amount), 0)
+                 FROM {$wpdb->prefix}insurance_crm_policies 
+                 WHERE representative_id = %d 
+                 AND start_date BETWEEN %s AND %s",
+                $rep_id, $this_month_start, $this_month_end
+            ));
+            
+            // Hedefe uzaklık hesaplama
+            $premium_achievement_rate = $member_data->monthly_target > 0 ? ($this_month_premium / $member_data->monthly_target) * 100 : 0;
+            $policy_achievement_rate = $member_data->target_policy_count > 0 ? ($this_month_policies / $member_data->target_policy_count) * 100 : 0;
+            
             $member_performance[] = [
                 'id' => $member_data->id,
                 'name' => $member_data->display_name,
                 'title' => $member_data->title,
                 'customers' => $customers,
                 'policies' => $policies,
-                'premium' => $premium
+                'premium' => $premium,
+                'this_month_policies' => $this_month_policies,
+                'this_month_premium' => $this_month_premium,
+                'monthly_target' => $member_data->monthly_target,
+                'target_policy_count' => $member_data->target_policy_count,
+                'premium_achievement_rate' => $premium_achievement_rate,
+                'policy_achievement_rate' => $policy_achievement_rate
             ];
         }
     }
@@ -324,7 +627,7 @@ $current_month_premium = $wpdb->get_var($wpdb->prepare(
      FROM {$wpdb->prefix}insurance_crm_policies
      WHERE representative_id IN (" . implode(',', array_fill(0, count($rep_ids), '%d')) . ") 
      AND start_date BETWEEN %s AND %s",
-    ...array_merge($rep_ids, [$current_month_start . ' 00:00:00', $this_month_end . ' 23:59:59'])
+    ...array_merge($rep_ids, [$current_month_start . ' 00:00:00', $current_month_end . ' 23:59:59'])
 ));
 
 if ($current_month_premium === null) $current_month_premium = 0;
@@ -332,6 +635,11 @@ if ($current_month_premium === null) $current_month_premium = 0;
 $monthly_target = $team_target > 0 ? $team_target : 1;
 $achievement_rate = ($current_month_premium / $monthly_target) * 100;
 $achievement_rate = min(100, $achievement_rate);
+
+// Poliçe hedef gerçekleşme oranı
+$policy_achievement_rate = ($team_policy_target > 0 && $new_policies > 0) ? 
+    ($new_policies / $team_policy_target) * 100 : 0;
+$policy_achievement_rate = min(100, $policy_achievement_rate);
 
 $recent_policies = $wpdb->get_results($wpdb->prepare(
     "SELECT p.*, c.first_name, c.last_name
@@ -488,7 +796,7 @@ if ($user_role == 'patron' || $user_role == 'manager') {
     
     foreach ($teams as $team_id => $team) {
         $leader_data = $wpdb->get_row($wpdb->prepare(
-            "SELECT r.id, u.display_name, r.title 
+            "SELECT r.id, u.display_name, r.title, r.monthly_target, r.target_policy_count 
              FROM {$wpdb->prefix}insurance_crm_representatives r 
              JOIN {$wpdb->users} u ON r.user_id = u.ID 
              WHERE r.id = %d",
@@ -506,7 +814,43 @@ if ($user_role == 'patron' || $user_role == 'manager') {
                  FROM {$wpdb->prefix}insurance_crm_policies 
                  WHERE representative_id IN (" . implode(',', array_fill(0, count($team_ids), '%d')) . ")",
                 ...$team_ids
-            ));
+            )) ?: 0;
+            
+            // Ekip üyelerinin toplam hedefi
+            $team_monthly_target = 0;
+            $team_policy_target = 0;
+            foreach ($team_ids as $id) {
+                $member_target = $wpdb->get_row($wpdb->prepare(
+                    "SELECT monthly_target, target_policy_count FROM {$wpdb->prefix}insurance_crm_representatives WHERE id = %d",
+                    $id
+                ));
+                $team_monthly_target += $member_target ? floatval($member_target->monthly_target) : 0;
+                $team_policy_target += $member_target ? intval($member_target->target_policy_count) : 0;
+            }
+            
+            // Bu ay üretilen poliçe sayısı
+            $month_start = date('Y-m-01 00:00:00');
+            $month_end = date('Y-m-t 23:59:59');
+            $team_month_policies = $wpdb->get_var($wpdb->prepare(
+                "SELECT COUNT(*) FROM {$wpdb->prefix}insurance_crm_policies 
+                WHERE representative_id IN (" . implode(',', array_fill(0, count($team_ids), '%d')) . ")
+                AND start_date BETWEEN %s AND %s
+                AND cancellation_date IS NULL",
+                ...array_merge($team_ids, [$month_start, $month_end])
+            )) ?: 0;
+            
+            // Bu ay üretilen prim
+            $team_month_premium = $wpdb->get_var($wpdb->prepare(
+                "SELECT COALESCE(SUM(premium_amount), 0) - COALESCE(SUM(refunded_amount), 0)
+                FROM {$wpdb->prefix}insurance_crm_policies 
+                WHERE representative_id IN (" . implode(',', array_fill(0, count($team_ids), '%d')) . ")
+                AND start_date BETWEEN %s AND %s",
+                ...array_merge($team_ids, [$month_start, $month_end])
+            )) ?: 0;
+            
+            // Hedef gerçekleşme oranı
+            $premium_achievement = $team_monthly_target > 0 ? ($team_month_premium / $team_monthly_target) * 100 : 0;
+            $policy_achievement = $team_policy_target > 0 ? ($team_month_policies / $team_policy_target) * 100 : 0;
             
             $all_teams[] = [
                 'id' => $team_id,
@@ -515,13 +859,60 @@ if ($user_role == 'patron' || $user_role == 'manager') {
                 'leader_name' => $leader_data->display_name,
                 'leader_title' => $leader_data->title,
                 'member_count' => $member_count,
-                'total_premium' => $team_premium
+                'total_premium' => $team_premium,
+                'monthly_target' => $team_monthly_target,
+                'policy_target' => $team_policy_target,
+                'month_policies' => $team_month_policies,
+                'month_premium' => $team_month_premium,
+                'premium_achievement' => $premium_achievement,
+                'policy_achievement' => $policy_achievement
             ];
         }
     }
     
     // Ekipleri toplam prim miktarına göre sırala (en yüksekten en düşüğe)
     usort($all_teams, function($a, $b) {
+        return $b['total_premium'] <=> $a['total_premium'];
+    });
+}
+
+// Tüm temsilcilerin hedef ve performans verileri (yalnızca patron için)
+$all_representatives_performance = [];
+if ($user_role == 'patron') {
+    $all_representatives = $wpdb->get_results(
+        "SELECT r.id, r.monthly_target, r.target_policy_count, u.display_name, r.title
+         FROM {$wpdb->prefix}insurance_crm_representatives r 
+         JOIN {$wpdb->users} u ON r.user_id = u.ID 
+         WHERE r.status = 'active'
+         ORDER BY u.display_name ASC"
+    );
+    
+    foreach ($all_representatives as $rep) {
+        $performance = get_representative_performance($rep->id);
+        
+        // Hedef gerçekleşme oranları
+        $premium_achievement = $rep->monthly_target > 0 ? 
+            ($performance['current_month_premium'] / $rep->monthly_target) * 100 : 0;
+        $policy_achievement = $rep->target_policy_count > 0 ? 
+            ($performance['current_month_policy_count'] / $rep->target_policy_count) * 100 : 0;
+        
+        $all_representatives_performance[] = [
+            'id' => $rep->id,
+            'name' => $rep->display_name,
+            'title' => $rep->title,
+            'monthly_target' => $rep->monthly_target,
+            'target_policy_count' => $rep->target_policy_count,
+            'total_premium' => $performance['total_premium'],
+            'current_month_premium' => $performance['current_month_premium'],
+            'total_policy_count' => $performance['total_policy_count'],
+            'current_month_policy_count' => $performance['current_month_policy_count'],
+            'premium_achievement' => $premium_achievement,
+            'policy_achievement' => $policy_achievement
+        ];
+    }
+    
+    // Performans verilerine göre sırala (en yüksek premium)
+    usort($all_representatives_performance, function($a, $b) {
         return $b['total_premium'] <=> $a['total_premium'];
     });
 }
@@ -586,6 +977,38 @@ function generate_panel_url($view, $action = '', $id = '', $additional_params = 
     
     return add_query_arg($query_args, $base_url);
 }
+
+// Activity Log tablosunu oluştur (eğer yoksa)
+function create_activity_log_table() {
+    global $wpdb;
+    
+    $table_name = $wpdb->prefix . 'insurance_crm_activity_logs';
+    
+    // Tablo var mı kontrol et
+    if ($wpdb->get_var("SHOW TABLES LIKE '$table_name'") != $table_name) {
+        // Tablo oluştur
+        $charset_collate = $wpdb->get_charset_collate();
+        
+        $sql = "CREATE TABLE $table_name (
+            id bigint(20) NOT NULL AUTO_INCREMENT,
+            user_id bigint(20) NOT NULL,
+            action_type varchar(50) NOT NULL,
+            item_type varchar(50) NOT NULL,
+            item_id bigint(20) NOT NULL,
+            details text NOT NULL,
+            created_at datetime DEFAULT '0000-00-00 00:00:00' NOT NULL,
+            PRIMARY KEY  (id)
+        ) $charset_collate;";
+        
+        require_once(ABSPATH . 'wp-admin/includes/upgrade.php');
+        dbDelta($sql);
+        
+        error_log('Activity log tablosu oluşturuldu.');
+    }
+}
+
+// Activity Log tablosunu oluştur
+create_activity_log_table();
 
 add_action('wp_enqueue_scripts', 'insurance_crm_rep_panel_scripts');
 function insurance_crm_rep_panel_scripts() {
@@ -798,7 +1221,8 @@ function insurance_crm_rep_panel_scripts() {
                             break;
                         default:
                             echo ($user_role == 'patron') ? 'Patron Dashboard' : 
-                                (($user_role == 'manager') ? 'Müdür Dashboard' : 'Dashboard');
+                                (($user_role == 'manager') ? 'Müdür Dashboard' : 
+                                (($user_role == 'team_leader') ? 'Ekip Lideri Dashboard' : 'Dashboard'));
                     }
                     ?>
                 </h2>
@@ -1016,6 +1440,9 @@ function insurance_crm_rep_panel_scripts() {
                                 <th>Ekip Lideri</th>
                                 <th>Üye Sayısı</th>
                                 <th>Toplam Prim (₺)</th>
+                                <th>Aylık Hedef (₺)</th>
+                                <th>Hedef Poliçe</th>
+                                <th>Gerçekleşme</th>
                                 <th>İşlemler</th>
                             </tr>
                         </thead>
@@ -1026,6 +1453,14 @@ function insurance_crm_rep_panel_scripts() {
                                 <td><?php echo esc_html($team['leader_name'] . ' (' . $team['leader_title'] . ')'); ?></td>
                                 <td><?php echo $team['member_count']; ?> üye</td>
                                 <td class="amount-cell">₺<?php echo number_format($team['total_premium'], 2, ',', '.'); ?></td>
+                                <td class="amount-cell">₺<?php echo number_format($team['monthly_target'], 2, ',', '.'); ?></td>
+                                <td><?php echo $team['policy_target']; ?> adet</td>
+                                <td>
+                                    <div class="progress-mini">
+                                        <div class="progress-bar" style="width: <?php echo min(100, $team['premium_achievement']); ?>%"></div>
+                                    </div>
+                                    <div class="progress-text"><?php echo number_format($team['premium_achievement'], 2); ?>%</div>
+                                </td>
                                 <td>
                                     <a href="<?php echo generate_panel_url('team', '', '', array('team_id' => $team['id'])); ?>" class="action-button view-button">
                                         <i class="dashicons dashicons-visibility"></i>
@@ -1048,7 +1483,70 @@ function insurance_crm_rep_panel_scripts() {
                     <?php endif; ?>
                 </div>
             </div>
-            
+
+            <!-- PATRON - Temsilci Hedefleri ve Performansları -->
+            <div class="dashboard-card target-performance-card">
+                <div class="card-header">
+                    <h3>Temsilci Performansları</h3>
+                    <div class="card-actions">
+                        <a href="<?php echo generate_panel_url('all_representatives'); ?>" class="text-button">Tüm Temsilciler</a>
+                    </div>
+                </div>
+                <div class="card-body">
+                    <?php if (!empty($all_representatives_performance)): ?>
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th>Temsilci</th>
+                                <th>Unvan</th>
+                                <th>Aylık Hedef (₺)</th>
+                                <th>Bu Ay Üretim (₺)</th>
+                                <th>Gerçekleşme (%)</th>
+                                <th>Hedef Poliçe</th>
+                                <th>Bu Ay Poliçe</th>
+                                <th>Gerçekleşme (%)</th>
+                                <th>İşlemler</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <?php foreach ($all_representatives_performance as $rep): ?>
+                            <tr>
+                                <td><?php echo esc_html($rep['name']); ?></td>
+                                <td><?php echo esc_html($rep['title']); ?></td>
+                                <td class="amount-cell">₺<?php echo number_format($rep['monthly_target'], 2, ',', '.'); ?></td>
+                                <td class="amount-cell">₺<?php echo number_format($rep['current_month_premium'], 2, ',', '.'); ?></td>
+                                <td>
+                                    <div class="progress-mini">
+                                        <div class="progress-bar" style="width: <?php echo min(100, $rep['premium_achievement']); ?>%"></div>
+                                    </div>
+                                    <div class="progress-text"><?php echo number_format($rep['premium_achievement'], 2); ?>%</div>
+                                </td>
+                                <td><?php echo $rep['target_policy_count']; ?> adet</td>
+                                <td><?php echo $rep['current_month_policy_count']; ?> adet</td>
+                                <td>
+                                    <div class="progress-mini">
+                                        <div class="progress-bar" style="width: <?php echo min(100, $rep['policy_achievement']); ?>%"></div>
+                                    </div>
+                                    <div class="progress-text"><?php echo number_format($rep['policy_achievement'], 2); ?>%</div>
+                                </td>
+                                <td>
+                                    <a href="<?php echo generate_panel_url('representative_detail', '', $rep['id']); ?>" class="action-button view-button">
+                                        <i class="dashicons dashicons-visibility"></i>
+                                        <span>Detay</span>
+                                    </a>
+                                </td>
+                            </tr>
+                            <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                    <?php else: ?>
+                    <div class="empty-state">
+                        <p>Henüz temsilci performans verisi bulunmamaktadır.</p>
+                    </div>
+                    <?php endif; ?>
+                </div>
+            </div>
+
             <?php elseif ($user_role == 'manager'): ?>
             <!-- MÜDÜR DASHBOARD İÇERİĞİ -->
             <div class="dashboard-header">
@@ -1157,6 +1655,9 @@ function insurance_crm_rep_panel_scripts() {
                                 <th>Ekip Lideri</th>
                                 <th>Üye Sayısı</th>
                                 <th>Toplam Prim (₺)</th>
+                                <th>Aylık Hedef (₺)</th>
+                                <th>Hedef Poliçe</th>
+                                <th>Gerçekleşme</th>
                                 <th>İşlemler</th>
                             </tr>
                         </thead>
@@ -1166,7 +1667,15 @@ function insurance_crm_rep_panel_scripts() {
                                 <td><?php echo esc_html($team['name']); ?></td>
                                 <td><?php echo esc_html($team['leader_name'] . ' (' . $team['leader_title'] . ')'); ?></td>
                                 <td><?php echo $team['member_count']; ?> üye</td>
-                <td class="amount-cell">₺<?php echo number_format($team['total_premium'], 2, ',', '.'); ?></td>
+                                <td class="amount-cell">₺<?php echo number_format($team['total_premium'], 2, ',', '.'); ?></td>
+                                <td class="amount-cell">₺<?php echo number_format($team['monthly_target'], 2, ',', '.'); ?></td>
+                                <td><?php echo $team['policy_target']; ?> adet</td>
+                                <td>
+                                    <div class="progress-mini">
+                                        <div class="progress-bar" style="width: <?php echo min(100, $team['premium_achievement']); ?>%"></div>
+                                    </div>
+                                    <div class="progress-text"><?php echo number_format($team['premium_achievement'], 2); ?>%</div>
+                                </td>
                                 <td>
                                     <a href="<?php echo generate_panel_url('team', '', '', array('team_id' => $team['id'])); ?>" class="action-button view-button">
                                         <i class="dashicons dashicons-visibility"></i>
@@ -1203,7 +1712,9 @@ function insurance_crm_rep_panel_scripts() {
                                 <th>Unvan</th>
                                 <th>Müşteri Sayısı</th>
                                 <th>Poliçe Sayısı</th>
-                                <th>Toplam Prim (₺)</th>
+                                <th>Aylık Hedef (₺)</th>
+                                <th>Bu Ay Üretim (₺)</th>
+                                <th>Gerçekleşme</th>
                                 <th>İşlemler</th>
                             </tr>
                         </thead>
@@ -1214,7 +1725,14 @@ function insurance_crm_rep_panel_scripts() {
                                 <td><?php echo esc_html($member['title']); ?></td>
                                 <td><?php echo number_format($member['customers']); ?></td>
                                 <td><?php echo number_format($member['policies']); ?></td>
-                                <td>₺<?php echo number_format($member['premium'], 2, ',', '.'); ?></td>
+                                <td>₺<?php echo number_format($member['monthly_target'], 2, ',', '.'); ?></td>
+                                <td>₺<?php echo number_format($member['this_month_premium'], 2, ',', '.'); ?></td>
+                                <td>
+                                    <div class="progress-mini">
+                                        <div class="progress-bar" style="width: <?php echo min(100, $member['premium_achievement_rate']); ?>%"></div>
+                                    </div>
+                                    <div class="progress-text"><?php echo number_format($member['premium_achievement_rate'], 2); ?>%</div>
+                                </td>
                                 <td>
                                     <a href="<?php echo generate_panel_url('representative_detail', '', $member['id']); ?>" class="action-button view-button">
                                         <i class="dashicons dashicons-visibility"></i>
@@ -1323,13 +1841,19 @@ function insurance_crm_rep_panel_scripts() {
                         <div class="stat-label"><?php echo $current_view == 'team' ? 'Ekip Bu Ay Üretim' : 'Bu Ay Üretim'; ?></div>
                     </div>
                     <div class="stat-target">
-                        <div class="target-text">Hedef: ₺<?php echo number_format($monthly_target, 2, ',', '.'); ?></div>
+                        <div class="target-text">Prim Hedefi: ₺<?php echo number_format($monthly_target, 2, ',', '.'); ?></div>
                         <?php
                         $remaining_amount = max(0, $monthly_target - $current_month_premium);
                         ?>
                         <div class="target-text">Hedefe Kalan: ₺<?php echo number_format($remaining_amount, 2, ',', '.'); ?></div>
                         <div class="target-progress-mini">
                             <div class="target-bar" style="width: <?php echo $achievement_rate; ?>%"></div>
+                        </div>
+                        
+                        <div class="target-text">Poliçe Hedefi: <?php echo $team_policy_target; ?> Adet</div>
+                        <div class="target-text">Gerçekleşen: <?php echo $new_policies; ?> Adet (<?php echo number_format($policy_achievement_rate, 2); ?>%)</div>
+                        <div class="target-progress-mini">
+                            <div class="target-bar" style="width: <?php echo $policy_achievement_rate; ?>%"></div>
                         </div>
                     </div>
                 </div>
@@ -1347,7 +1871,11 @@ function insurance_crm_rep_panel_scripts() {
                                 <th>Üye Adı</th>
                                 <th>Müşteri Sayısı</th>
                                 <th>Poliçe Sayısı</th>
-                                <th>Toplam Prim (₺)</th>
+                                <th>Aylık Hedef (₺)</th>
+                                <th>Bu Ay Üretim (₺)</th>
+                                <th>Gerçekleşme</th>
+                                <th>Hedef Poliçe</th>
+                                <th>Bu Ay Poliçe</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -1356,7 +1884,16 @@ function insurance_crm_rep_panel_scripts() {
                                 <td><?php echo esc_html($member['name']); ?></td>
                                 <td><?php echo number_format($member['customers']); ?></td>
                                 <td><?php echo number_format($member['policies']); ?></td>
-                                <td>₺<?php echo number_format($member['premium'], 2, ',', '.'); ?></td>
+                                <td>₺<?php echo number_format($member['monthly_target'], 2, ',', '.'); ?></td>
+                                <td>₺<?php echo number_format($member['this_month_premium'], 2, ',', '.'); ?></td>
+                                <td>
+                                    <div class="progress-mini">
+                                        <div class="progress-bar" style="width: <?php echo min(100, $member['premium_achievement_rate']); ?>%"></div>
+                                    </div>
+                                    <div class="progress-text"><?php echo number_format($member['premium_achievement_rate'], 2); ?>%</div>
+                                </td>
+                                <td><?php echo $member['target_policy_count']; ?> adet</td>
+                                <td><?php echo $member['this_month_policies']; ?> adet</td>
                             </tr>
                             <?php endforeach; ?>
                         </tbody>
@@ -1739,7 +2276,11 @@ function insurance_crm_rep_panel_scripts() {
                                                         <div class="table-action-dropdown">
                                                             <a href="<?php echo generate_panel_url('policies', 'renew', $policy->id); ?>">Yenile</a>
                                                             <a href="<?php echo generate_panel_url('policies', 'duplicate', $policy->id); ?>">Kopyala</a>
+                                                            <?php if (can_delete_items($current_user->ID)): ?>
                                                             <a href="<?php echo generate_panel_url('policies', 'cancel', $policy->id); ?>" class="text-danger">İptal Et</a>
+                                                            <?php else: ?>
+                                                            <a href="<?php echo generate_panel_url('policies', 'deactivate', $policy->id); ?>" class="text-warning">Pasife Al</a>
+                                                            <?php endif; ?>
                                                         </div>
                                                     </div>
                                                 </div>
@@ -1813,7 +2354,17 @@ function insurance_crm_rep_panel_scripts() {
                                                             <i class="dashicons dashicons-ellipsis"></i>
                                                         </button>
                                                         <div class="table-action-dropdown">
-                                                            <a href="?view=customers&action=delete&id=<?php echo esc_attr($customer->id); ?>"><?php esc_html_e('Sil', 'insurance-crm'); ?></a>
+                                                            <?php if (can_delete_items($current_user->ID)): ?>
+                                                            <a href="?view=customers&action=delete&id=<?php echo esc_attr($customer->id); ?>" 
+                                                               onclick="return confirm('Bu müşteriyi silmek istediğinizden emin misiniz? Bu işlem geri alınamaz.')" class="text-danger">
+                                                                <?php esc_html_e('Sil', 'insurance-crm'); ?>
+                                                            </a>
+                                                            <?php else: ?>
+                                                            <a href="?view=customers&action=deactivate&id=<?php echo esc_attr($customer->id); ?>" 
+                                                               onclick="return confirm('Bu müşteriyi pasife almak istediğinizden emin misiniz?')" class="text-warning">
+                                                                <?php esc_html_e('Pasife Al', 'insurance-crm'); ?>
+                                                            </a>
+                                                            <?php endif; ?>
                                                         </div>
                                                     </div>
                                                 </div>
@@ -1833,7 +2384,7 @@ function insurance_crm_rep_panel_scripts() {
                 </div>
             </div>
         <?php elseif ($current_view == 'all_teams' || $current_view == 'all_representatives' || $current_view == 'organization' || $current_view == 'manager_dashboard' || $current_view == 'team_leaders'): ?>
-            <!-- YENİ YÖNETİM SEKME İÇERİKLERİ -->
+            <!-- YÖNETİM SEKME İÇERİKLERİ -->
             <div class="main-content">
                 <?php if ($current_view == 'organization'): ?>
                 <div class="dashboard-card hierarchy-card">
@@ -1953,47 +2504,27 @@ function insurance_crm_rep_panel_scripts() {
                                     <th>Üye Sayısı</th>
                                     <th>Toplam Prim (₺)</th>
                                     <th>Aylık Hedef (₺)</th>
+                                    <th>Hedef Poliçe</th>
+                                    <th>Bu Ay Üretim</th>
                                     <th>Gerçekleşme Oranı</th>
                                     <th>İşlemler</th>
                                 </tr>
                             </thead>
                             <tbody>
-                                <?php foreach ($all_teams as $team): 
-                                    // Ekip hedefi hesaplama
-                                    $team_target = 0;
-                                    $team_members_str = implode(',', array_map('intval', array_merge([$team['leader_id']], array_map('intval', explode(',', $team['member_count'])))));
-                                    $team_targets = $wpdb->get_results("
-                                        SELECT monthly_target FROM {$wpdb->prefix}insurance_crm_representatives 
-                                        WHERE id IN ($team_members_str)
-                                    ");
-                                    foreach ($team_targets as $target) {
-                                        $team_target += floatval($target->monthly_target);
-                                    }
-                                    
-                                    // Ekip bu ay üretim
-                                    $current_month_start = date('Y-m-01');
-                                    $current_month_end = date('Y-m-t');
-                                    $team_current_month_premium = $wpdb->get_var("
-                                        SELECT COALESCE(SUM(premium_amount), 0) - COALESCE(SUM(refunded_amount), 0)
-                                        FROM {$wpdb->prefix}insurance_crm_policies
-                                        WHERE representative_id IN ($team_members_str) 
-                                        AND start_date BETWEEN '$current_month_start 00:00:00' AND '$current_month_end 23:59:59'
-                                    ");
-                                    
-                                    // Gerçekleşme oranı
-                                    $team_achievement_rate = $team_target > 0 ? ($team_current_month_premium / $team_target) * 100 : 0;
-                                ?>
+                                <?php foreach ($all_teams as $team): ?>
                                 <tr>
                                     <td><?php echo esc_html($team['name']); ?></td>
                                     <td><?php echo esc_html($team['leader_name'] . ' (' . $team['leader_title'] . ')'); ?></td>
                                     <td><?php echo $team['member_count']; ?> üye</td>
                                     <td class="amount-cell">₺<?php echo number_format($team['total_premium'], 2, ',', '.'); ?></td>
-                                    <td class="amount-cell">₺<?php echo number_format($team_target, 2, ',', '.'); ?></td>
+                                    <td class="amount-cell">₺<?php echo number_format($team['monthly_target'], 2, ',', '.'); ?></td>
+                                    <td><?php echo $team['policy_target']; ?> adet</td>
+                                    <td class="amount-cell">₺<?php echo number_format($team['month_premium'], 2, ',', '.'); ?></td>
                                     <td>
                                         <div class="progress-mini">
-                                            <div class="progress-bar" style="width: <?php echo min(100, $team_achievement_rate); ?>%"></div>
+                                            <div class="progress-bar" style="width: <?php echo min(100, $team['premium_achievement']); ?>%"></div>
                                         </div>
-                                        <div class="progress-text"><?php echo number_format($team_achievement_rate, 2); ?>%</div>
+                                        <div class="progress-text"><?php echo number_format($team['premium_achievement'], 2); ?>%</div>
                                     </td>
                                     <td>
                                         <div class="table-actions">
@@ -2038,16 +2569,18 @@ function insurance_crm_rep_panel_scripts() {
                         <?php endif; ?>
                     </div>
                     <div class="card-body">
-                        <?php if (!empty($member_performance)): ?>
+                        <?php if (!empty($all_representatives_performance)): ?>
                         <table class="data-table">
                             <thead>
                                 <tr>
                                     <th>Temsilci Adı</th>
                                     <th>Unvan</th>
                                     <th>Rol</th>
-                                    <th>Müşteri Sayısı</th>
-                                    <th>Poliçe Sayısı</th>
-                                    <th>Toplam Prim (₺)</th>
+                                    <th>Aylık Hedef (₺)</th>
+                                    <th>Bu Ay (₺)</th>
+                                    <th>Gerçekleşme</th>
+                                    <th>Hedef Poliçe</th>
+                                    <th>Bu Ay Poliçe</th>
                                     <th>İşlemler</th>
                                 </tr>
                             </thead>
@@ -2065,18 +2598,18 @@ function insurance_crm_rep_panel_scripts() {
                                     $team_leader_ids[] = $team['leader_id'];
                                 }
                                 
-                                foreach ($member_performance as $member): 
+                                foreach ($all_representatives_performance as $rep): 
                                     // Rol belirleme
                                     $role = '';
                                     $role_class = '';
                                     
-                                    if ($member['id'] == $patron_id) {
+                                    if ($rep['id'] == $patron_id) {
                                         $role = 'Patron';
                                         $role_class = 'patron-role';
-                                    } elseif ($member['id'] == $manager_id) {
+                                    } elseif ($rep['id'] == $manager_id) {
                                         $role = 'Müdür';
                                         $role_class = 'manager-role';
-                                    } elseif (in_array($member['id'], $team_leader_ids)) {
+                                    } elseif (in_array($rep['id'], $team_leader_ids)) {
                                         $role = 'Ekip Lideri';
                                         $role_class = 'leader-role';
                                     } else {
@@ -2085,19 +2618,26 @@ function insurance_crm_rep_panel_scripts() {
                                     }
                                 ?>
                                 <tr>
-                                    <td><?php echo esc_html($member['name']); ?></td>
-                                    <td><?php echo esc_html($member['title']); ?></td>
+                                    <td><?php echo esc_html($rep['name']); ?></td>
+                                    <td><?php echo esc_html($rep['title']); ?></td>
                                     <td><span class="role-badge <?php echo $role_class; ?>"><?php echo $role; ?></span></td>
-                                    <td><?php echo number_format($member['customers']); ?></td>
-                                    <td><?php echo number_format($member['policies']); ?></td>
-                                    <td>₺<?php echo number_format($member['premium'], 2, ',', '.'); ?></td>
+                                    <td class="amount-cell">₺<?php echo number_format($rep['monthly_target'], 2, ',', '.'); ?></td>
+                                    <td class="amount-cell">₺<?php echo number_format($rep['current_month_premium'], 2, ',', '.'); ?></td>
+                                    <td>
+                                        <div class="progress-mini">
+                                            <div class="progress-bar" style="width: <?php echo min(100, $rep['premium_achievement']); ?>%"></div>
+                                        </div>
+                                        <div class="progress-text"><?php echo number_format($rep['premium_achievement'], 2); ?>%</div>
+                                    </td>
+                                    <td><?php echo $rep['target_policy_count']; ?></td>
+                                    <td><?php echo $rep['current_month_policy_count']; ?></td>
                                     <td>
                                         <div class="table-actions">
-                                            <a href="<?php echo generate_panel_url('representative_detail', '', $member['id']); ?>" class="table-action" title="Görüntüle">
+                                            <a href="<?php echo generate_panel_url('representative_detail', '', $rep['id']); ?>" class="table-action" title="Görüntüle">
                                                 <i class="dashicons dashicons-visibility"></i>
                                             </a>
                                             <?php if ($user_role == 'patron'): ?>
-                                            <a href="<?php echo admin_url('admin.php?page=insurance-crm-representatives&action=edit&id=' . $member['id']); ?>" class="table-action" title="Düzenle">
+                                            <a href="<?php echo admin_url('admin.php?page=insurance-crm-representatives&action=edit&id=' . $rep['id']); ?>" class="table-action" title="Düzenle">
                                                 <i class="dashicons dashicons-edit"></i>
                                             </a>
                                             <?php endif; ?>
@@ -2135,9 +2675,12 @@ function insurance_crm_rep_panel_scripts() {
                                         'title' => $member['title'],
                                         'team_name' => $team['name'],
                                         'team_size' => $team['member_count'],
-                                        'customers' => $member['customers'],
-                                        'policies' => $member['policies'],
-                                        'premium' => $member['premium']
+                                        'monthly_target' => $member['monthly_target'],
+                                        'this_month_premium' => $member['this_month_premium'],
+                                        'premium_achievement_rate' => $member['premium_achievement_rate'],
+                                        'target_policy_count' => $member['target_policy_count'],
+                                        'this_month_policies' => $member['this_month_policies'],
+                                        'policy_achievement_rate' => $member['policy_achievement_rate']
                                     );
                                     break;
                                 }
@@ -2153,9 +2696,9 @@ function insurance_crm_rep_panel_scripts() {
                                     <th>Unvan</th>
                                     <th>Ekip Adı</th>
                                     <th>Ekip Boyutu</th>
-                                    <th>Müşteri Sayısı</th>
-                                    <th>Poliçe Sayısı</th>
-                                    <th>Toplam Prim (₺)</th>
+                                    <th>Aylık Hedef (₺)</th>
+                                    <th>Bu Ay (₺)</th>
+                                    <th>Gerçekleşme</th>
                                     <th>İşlemler</th>
                                 </tr>
                             </thead>
@@ -2166,9 +2709,14 @@ function insurance_crm_rep_panel_scripts() {
                                     <td><?php echo esc_html($leader['title']); ?></td>
                                     <td><?php echo esc_html($leader['team_name']); ?></td>
                                     <td><?php echo $leader['team_size']; ?> üye</td>
-                                    <td><?php echo number_format($leader['customers']); ?></td>
-                                    <td><?php echo number_format($leader['policies']); ?></td>
-                                    <td>₺<?php echo number_format($leader['premium'], 2, ',', '.'); ?></td>
+                                    <td class="amount-cell">₺<?php echo number_format($leader['monthly_target'], 2, ',', '.'); ?></td>
+                                    <td class="amount-cell">₺<?php echo number_format($leader['this_month_premium'], 2, ',', '.'); ?></td>
+                                    <td>
+                                        <div class="progress-mini">
+                                            <div class="progress-bar" style="width: <?php echo min(100, $leader['premium_achievement_rate']); ?>%"></div>
+                                        </div>
+                                        <div class="progress-text"><?php echo number_format($leader['premium_achievement_rate'], 2); ?>%</div>
+                                    </td>
                                     <td>
                                         <a href="<?php echo generate_panel_url('representative_detail', '', $leader['id']); ?>" class="action-button view-button">
                                             <i class="dashicons dashicons-visibility"></i>
@@ -2660,7 +3208,6 @@ function insurance_crm_rep_panel_scripts() {
                 overflow: hidden;
                 z-index: 1000;
             }
-            
             .quick-add-dropdown.show {
                 display: block;
             }
@@ -2814,6 +3361,7 @@ function insurance_crm_rep_panel_scripts() {
                 background: #e9ecef;
                 border-radius: 3px;
                 overflow: hidden;
+                margin-bottom: 6px;
             }
             
             .target-bar {
@@ -2873,7 +3421,8 @@ function insurance_crm_rep_panel_scripts() {
             }
             
             .member-performance-card,
-            .team-performance-card {
+            .team-performance-card,
+            .target-performance-card {
                 margin-bottom: 20px;
             }
             
@@ -2956,6 +3505,7 @@ function insurance_crm_rep_panel_scripts() {
             
             .team-leaders-level {
                 flex-wrap: wrap;
+                gap: 15px;
             }
             
             .org-box {
@@ -3362,12 +3912,8 @@ function insurance_crm_rep_panel_scripts() {
             }
             
             .task-list {
-                list-style: none;
+                list-style-type: none;
                 padding: 0;
-                margin: 0;
-                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen-Sans, Ubuntu, Cantarell, "Helvetica Neue", sans-serif;
-                font-size: 14px;
-                color: #444;
             }
             
             .task-item {
@@ -3376,268 +3922,116 @@ function insurance_crm_rep_panel_scripts() {
                 display: flex;
                 justify-content: space-between;
                 align-items: center;
-                line-height: 1.5;
-                transition: background 0.2s ease;
-            }
-            
-            .task-item:hover {
-                background: #f9f9f9;
+                font-size: 13px;
             }
             
             .task-item:last-child {
                 border-bottom: none;
             }
             
-            .task-item strong {
-                font-weight: 600;
-                color: #333;
-            }
-            
             .task-link {
+                margin-left: 10px;
                 color: #0073aa;
                 text-decoration: none;
                 font-size: 12px;
-                font-weight: 500;
-                transition: color 0.2s ease;
             }
             
             .task-link:hover {
-                color: #005a87;
                 text-decoration: underline;
             }
             
-            .card-body h4 {
-                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen-Sans, Ubuntu, Cantarell, "Helvetica Neue", sans-serif;
-                font-size: 16px;
-                font-weight: 600;
-                color: #333;
-                margin-bottom: 15px;
-            }
-            
-            .search-results-table th,
-            .search-results-table td {
-                padding: 12px 15px;
-            }
-            
-            .search-results-table .status-badge {
-                min-width: 80px;
-                text-align: center;
-            }
-            
-            @media (max-width: 1200px) {
+            /* Responsive Adjustments */
+            @media (max-width: 992px) {
                 .stats-grid {
                     grid-template-columns: repeat(2, 1fr);
                 }
-                
                 .dashboard-grid .upper-section {
                     flex-direction: column;
-                    gap: 20px;
                 }
-                
                 .dashboard-grid .upper-section .dashboard-card.chart-card,
                 .dashboard-grid .upper-section .dashboard-card.calendar-card {
                     width: 100%;
-                    max-width: none;
                 }
-                
-                .org-level.team-leaders-level {
-                    flex-direction: column;
-                    align-items: center;
-                }
-                
-                .team-leader-box {
-                    margin-bottom: 15px;
-                }
-            }
-            
-            @media (max-width: 960px) {
-                .insurance-crm-sidenav {
-                    transform: translateX(-100%);
-                }
-                
-                .insurance-crm-main {
-                    margin-left: 0;
-                }
-                
-                .insurance-crm-sidenav.show {
-                    transform: translateX(0);
-                }
-                
                 .search-box input {
+                    width: 150px;
+                }
+                .search-box input:focus {
                     width: 200px;
                 }
-                
-                .search-box input:focus {
-                    width: 250px;
+            }
+            
+            @media (max-width: 768px) {
+                .insurance-crm-sidenav {
+                    width: 60px;
+                    transform: translateX(0);
                 }
-                
-                #calendar .fc-daygrid-day {
-                    font-size: 10px;
+                .insurance-crm-sidenav.expanded {
+                    width: 260px;
                 }
-                
-                .fc-task-count {
-                    font-size: 8px;
-                    padding: 0px 3px;
-                }
-                
-                .fc-daygrid-day-number {
-                    font-size: 8px;
-                }
-                
-                /* Mobil görünüm için tablo düzenlemeleri */
-                .renewals-table th.hide-mobile,
-                .renewals-table td.hide-mobile,
-                .expired-policies-table th.hide-mobile,
-                .expired-policies-table td.hide-mobile,
-                .policies-table th.hide-mobile,
-                .policies-table td.hide-mobile {
+                .sidenav-header h3, 
+                .user-info h4, 
+                .user-info span,
+                .sidenav-menu a span, 
+                .logout-button span,
+                .sidenav-submenu .submenu-items {
                     display: none;
                 }
-                
-                .renewals-table th,
-                .renewals-table td,
-                .expired-policies-table th,
-                .expired-policies-table td,
-                .policies-table th,
-                .policies-table td {
-                    padding: 8px;
-                    font-size: 12px;
+                .insurance-crm-sidenav.expanded .sidenav-header h3, 
+                .insurance-crm-sidenav.expanded .user-info h4, 
+                .insurance-crm-sidenav.expanded .user-info span, 
+                .insurance-crm-sidenav.expanded .sidenav-menu a span,
+                .insurance-crm-sidenav.expanded .logout-button span {
+                    display: block;
                 }
-                
-                .renewals-table td,
-                .expired-policies-table td,
-                .policies-table td {
-                    display: table-cell;
-                    vertical-align: middle;
+                .insurance-crm-sidenav.expanded .sidenav-submenu .submenu-items {
+                    display: block;
                 }
-                
-                .action-button {
-                    padding: 4px 8px;
-                    font-size: 12px;
+                .insurance-crm-main {
+                    margin-left: 60px;
                 }
-                
-                .action-button .dashicons {
-                    font-size: 12px;
-                    width: 12px;
-                    height: 12px;
-                    margin-right: 4px;
+                .insurance-crm-sidenav.expanded + .insurance-crm-main {
+                    margin-left: 260px;
                 }
-                
-                .table-actions {
-                    gap: 6px;
+                .stats-grid {
+                    grid-template-columns: repeat(1, 1fr);
                 }
-                
-                .table-action {
-                    width: 24px;
-                    height: 24px;
-                }
-                
-                .sidenav-submenu .submenu-items {
-                    padding-left: 10px;
-                }
-                
-                .submenu-items a {
-                    font-size: 13px;
-                    padding: 8px 15px;
-                }
-                
-                .org-box {
-                    width: 180px;
-                    padding: 15px;
+                .hide-mobile {
+                    display: none;
                 }
             }
             
-            @media (max-width: 600px) {
-                .stats-grid {
-                    grid-template-columns: 1fr;
-                }
-                
-                .main-header {
-                    flex-direction: column;
-                    align-items: flex-start;
-                    gap: 10px;
-                }
-                
-                .header-right {
-                    width: 100%;
-                    justify-content: space-between;
-                }
-                
-                .search-box {
-                    flex: 1;
-                    margin-right: 0;
-                }
-                
-                .search-box input {
-                    width: 100%;
-                }
-                
-                .search-box input:focus {
-                    width: 100%;
-                }
-                
+            @media (max-width: 576px) {
                 .main-content {
-                    padding: 20px 15px;
+                    padding: 15px;
                 }
-                
-                .data-table th,
-                .data-table td {
-                    font-size: 13px;
-                    padding: 10px;
+                .main-header {
+                    padding: 10px 15px;
                 }
-                
-                #calendar .fc-daygrid-day-number {
-                    font-size: 7px;
-                }
-                
-                .fc-task-count {
-                    font-size: 7px;
-                    padding: 0px 2px;
-                }
-                
-                .org-box {
-                    width: 150px;
-                    padding: 10px;
-                }
-                
-                .org-name {
+                .header-left h2 {
                     font-size: 16px;
                 }
-                
-                .org-title {
-                    font-size: 14px;
+                .quick-add-btn span {
+                    display: none;
                 }
             }
         </style>
         
         <script>
         document.addEventListener('DOMContentLoaded', function() {
-            // SideNav Toggle
+            const sidenavToggle = document.getElementById('sidenav-toggle');
             const sidenav = document.querySelector('.insurance-crm-sidenav');
-            const sidenavToggle = document.querySelector('#sidenav-toggle');
-            sidenavToggle.addEventListener('click', function() {
-                sidenav.classList.toggle('show');
-            });
+            const main = document.querySelector('.insurance-crm-main');
             
-            // Quick Add Dropdown
-            const quickAddBtn = document.querySelector('#quick-add-toggle');
-            const quickAddDropdown = document.querySelector('.quick-add-dropdown');
-            if (quickAddBtn && quickAddDropdown) {
-                quickAddBtn.addEventListener('click', function(e) {
-                    e.preventDefault();
-                    quickAddDropdown.classList.toggle('show');
-                });
-                
-                document.addEventListener('click', function(e) {
-                    if (!quickAddBtn.contains(e.target) && !quickAddDropdown.contains(e.target)) {
-                        quickAddDropdown.classList.remove('show');
-                    }
+            if (sidenavToggle) {
+                sidenavToggle.addEventListener('click', function() {
+                    sidenav.classList.toggle('expanded');
                 });
             }
             
-            // Notifications Dropdown
-            const notificationsToggle = document.querySelector('#notifications-toggle');
+            // Notifications Dropdown Toggle
+            const notificationsToggle = document.getElementById('notifications-toggle');
             const notificationsDropdown = document.querySelector('.notifications-dropdown');
+            
             if (notificationsToggle && notificationsDropdown) {
                 notificationsToggle.addEventListener('click', function(e) {
                     e.preventDefault();
@@ -3647,6 +4041,23 @@ function insurance_crm_rep_panel_scripts() {
                 document.addEventListener('click', function(e) {
                     if (!notificationsToggle.contains(e.target) && !notificationsDropdown.contains(e.target)) {
                         notificationsDropdown.classList.remove('show');
+                    }
+                });
+            }
+            
+            // Quick Add Dropdown Toggle
+            const quickAddToggle = document.getElementById('quick-add-toggle');
+            const quickAddDropdown = document.querySelector('.quick-add-dropdown');
+            
+            if (quickAddToggle && quickAddDropdown) {
+                quickAddToggle.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    quickAddDropdown.classList.toggle('show');
+                });
+                
+                document.addEventListener('click', function(e) {
+                    if (!quickAddToggle.contains(e.target) && !quickAddDropdown.contains(e.target)) {
+                        quickAddDropdown.classList.remove('show');
                     }
                 });
             }
@@ -3777,4 +4188,4 @@ function insurance_crm_rep_panel_scripts() {
         
         <?php wp_footer(); ?>
     </body>
-</html>
+</html>            
